@@ -1,0 +1,7 @@
+Metadata-Version: 2.4
+Name: ai-factory
+Version: 0.1.0
+Summary: Core AI factory: agents, MCP clients, RAG, DB access for local workspace
+Requires-Python: >=3.11
+Requires-Dist: psycopg2-binary>=2.9
+Requires-Dist: requests>=2.31
