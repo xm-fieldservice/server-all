@@ -51,7 +51,7 @@
 3. **整理环节（Section）**
    - 对短期记忆进行整理、去重、合并、结构化
    - 形成高质量的笔记内容
-   - 通过MCP工具触发，或自动触发（每10条message或每30分钟）
+   - 通过MCP工具触发，或自动触发（可配置的消息数量或时间间隔）
 
 4. **统一存储到entries大库**
     - 所有整理后的内容进入entries表
@@ -83,7 +83,7 @@
 │              L2: 整理环节（Section）                        │
 │  对短期记忆进行：整理、去重、合并、结构化                    │
 │  形成高质量的笔记内容                                       │
-│  触发方式：MCP工具 + 自动触发（每10条message或每30分钟）        │
+│  触发方式：MCP工具 + 自动触发（可配置的消息数量或时间间隔）        │
 └─────────────────────────────────────────────────────────────┘
                            │
                            ↓
@@ -757,7 +757,198 @@ class MemoryManager:
   - 动态上下文走 RAG/SessionService 构建链路，不固化进 `agent.context`。
   - 检索阶段按 `section_id` 聚拢并以 `is_latest` 过滤，减少冲突与重复。
 
+### 1.9 实现示例
+
+以下是一个简化的 `MemoryService` 实现片段，展示如何组装动态上下文：
+
+```python
+from typing import List, Dict, Any, Optional
+from datetime import datetime, timedelta
+from enum import Enum
+
+class ContextRole(str, Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+
+class ContextSnippet:
+    """上下文片段"""
+    def __init__(self, role: ContextRole, content: str, weight: float = 1.0, metadata: Dict[str, Any] = None):
+        self.role = role
+        self.content = content
+        self.weight = weight
+        self.metadata = metadata or {}
+
+class MemoryService:
+    """记忆服务（负责组装上下文）"""
+    
+    def __init__(self, session_service, entry_service, rag_service):
+        self.session_service = session_service
+        self.entry_service = entry_service
+        self.rag_service = rag_service
+    
+    def get_context_for_turn(
+        self,
+        session_id: str,
+        max_tokens: int = 2000,
+        roles: Optional[List[ContextRole]] = None,
+        include_tools: bool = True,
+        time_window: Optional[timedelta] = None,
+        include_pinned: bool = True,
+        rag_top_k: int = 5,
+        rag_filters: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """为当前轮次组装上下文"""
+        context_snippets = []
+        
+        # 1. 静态上下文（来自agent配置）
+        static_prompt = self._get_static_prompt(session_id)
+        if static_prompt:
+            context_snippets.append(ContextSnippet(
+                role=ContextRole.SYSTEM,
+                content=static_prompt,
+                weight=2.0
+            ))
+        
+        # 2. 短期记忆（最近消息）
+        recent_messages = self.session_service.get_recent_messages(
+            session_id,
+            limit=20,
+            time_window=time_window
+        )
+        for msg in recent_messages:
+            if include_pinned or not msg.metadata.get("is_pinned", False):
+                context_snippets.append(ContextSnippet(
+                    role=ContextRole(msg.role),
+                    content=msg.content,
+                    weight=1.0 + (0.5 if msg.metadata.get("is_pinned") else 0.0),
+                    metadata=msg.metadata
+                ))
+        
+        # 3. RAG检索（外部知识）
+        if rag_top_k > 0:
+            query = self._extract_query_from_session(session_id)
+            rag_results = self.rag_service.retrieve(
+                query=query,
+                top_k=rag_top_k,
+                filters=rag_filters
+            )
+            for result in rag_results:
+                context_snippets.append(ContextSnippet(
+                    role=ContextRole.SYSTEM,
+                    content=f"[知识] {result['content']}",
+                    weight=1.2,
+                    metadata={"source": result["source"]}
+                ))
+        
+        # 4. 按权重排序并截断至token预算
+        sorted_snippets = sorted(context_snippets, key=lambda x: x.weight, reverse=True)
+        final_snippets = self._truncate_to_token_budget(sorted_snippets, max_tokens)
+        
+        return {
+            "system_prompt": static_prompt,
+            "history_messages": [s for s in final_snippets if s.role != ContextRole.SYSTEM],
+            "rag_snippets": [s for s in final_snippets if s.metadata.get("source")],
+            "metadata": {
+                "token_budget": max_tokens,
+                "applied_rules": ["weight_sort", "token_truncation"],
+                "total_snippets": len(final_snippets)
+            }
+        }
+    
+    def _truncate_to_token_budget(self, snippets: List[ContextSnippet], max_tokens: int) -> List[ContextSnippet]:
+        """简化版的token截断（实际应使用tokenizer）"""
+        selected = []
+        total_tokens = 0
+        for snippet in snippets:
+            # 估算token数（按字符数/4粗略估算）
+            est_tokens = len(snippet.content) // 4
+            if total_tokens + est_tokens <= max_tokens:
+                selected.append(snippet)
+                total_tokens += est_tokens
+            else:
+                break
+        return selected
+    
+    def _get_static_prompt(self, session_id: str) -> str:
+        """获取静态提示词（示例）"""
+        # 实际应从agent配置或数据库中获取
+        return "你是一个有帮助的助手，请根据上下文回答问题。"
+    
+    def _extract_query_from_session(self, session_id: str) -> str:
+        """从会话中提取检索查询（示例）"""
+        # 实际可提取最近用户问题或会话摘要
+        return "用户最近的问题"
+```
+
+以上示例展示了如何将静态上下文、短期记忆和RAG检索组合成动态上下文，并按权重和token预算进行筛选。
+
 ---
+### 1.10 Memory0 设计（长期记忆治理）
+
+Memory0（Memory Zero）是长期记忆的治理层，运行在 `entries` 数据之上，负责处理“知识入库后的治理问题”：新知识是新增、旧知识强化、还是规则更新/冲突。
+
+#### 1.10.1 核心功能
+
+- **入库通道统一**：所有记忆片段（来自聊天总结、显式记忆、外部知识）都通过 `EntryService` 写入 `entries` 表，Memory0 在此基础上做二次治理；
+- **相似度检索**：在指定 user/agent/space 范围内，利用向量检索找出相似的历史条目；
+- **关系判定**：判断候选知识与已有记忆的关系（新增/强化/覆盖/冲突）；
+- **权重更新**：根据关系调整条目权重（`importance`、`usage_count`、`last_seen_at`）；
+- **版本链管理**：对规则更新类记忆，建立新旧条目的覆盖链（`overridden_entry_ids`）。
+
+#### 1.10.2 设计原则
+
+1. **只读 entries，写回也通过 EntryService**：Memory0 不直接操作数据库表，所有写入/更新都调用 `EntryService` 完成；
+2. **异步治理**：Memory0 的工作通常由后台 Worker 异步执行，不阻塞实时对话；
+3. **可配置策略**：相似度阈值、冲突判定逻辑、权重更新公式等可通过配置调整。
+
+#### 1.10.3 与 SectionService 的协作
+
+SectionService 完成“聊天总结 → 第一次写入 entries”后，会向任务队列提交一个 Memory0 任务；Memory0 异步读取该 entry，执行治理逻辑，再通过 EntryService 写回结果。
+
+---
+### 1.11 Agent视角下的记忆模块与入库通道
+
+在 AI 工厂的整体架构中，“入库通道”不再被视为悬浮在系统之上的独立总线，而是作为**标准记忆模块**挂载到每一个 Agent 上，由 Agent 的配置来决定记忆行为和元数据归属。
+
+#### 1.11.1 Agent 作为记忆与元数据的第一锚点
+
+- 每个 Agent 拥有清晰的身份与职责范围（部门、业务域、角色等），这些信息记录在 Agent Profile 中；
+- 记忆入库时，优先根据 `agent_id` 和 Agent Profile 自动确定：
+  - 组织归属（如部门/团队/项目等）；
+  - 空间类型或作用域（个人空间、部门空间、项目空间等）；
+  - 基础场景标签模板（如 `department`、`execution`、`planning` 等维度的默认值）；
+- Section/Memory0 在此基础上，再补充内容相关标签与关联结构，从而形成“基础归属 + 语义细节”的完整记忆视图。
+
+> 约定：
+> - 任意一条 entries 记录，只要知道 `agent_id`，就可以推导出其大部分组织/空间类元数据；
+> - 用户界面中不再要求用户手工选择部门/空间，而是通过“选择使用哪个 Agent”间接完成归属选择。
+
+#### 1.11.2 入库通道作为标准记忆模块
+
+从实现角度看，本章所描述的 SessionService、SectionService、EntryService、Memory0Service 共同构成了一个**标准记忆模块**，该模块在运行时以“入库通道”的形式为 Agent 提供服务：
+
+- **统一流水线：**
+  - SessionService：负责短期会话缓存；
+  - SectionService：负责片段切分与整理，总结为候选知识；
+  - EntryService：负责统一入库到 `entries` 大库；
+  - Memory0Service：负责长期记忆治理与权重/版本管理；
+- **Agent 挂载方式：**
+  - 每个 Agent 在配置中声明其使用的记忆策略（是否启用 Section、多 Agent 切分策略、Memory0 策略档位等）；
+  - 在代码实现上，Agent 通过统一的 MemoryService 接口调用上述服务，而不是各自实现一套入库流水线；
+  - 同一套物理服务可以被多个 Agent 复用，不同 Agent 之间通过 `agent_id`、`scene_tags`、`space_type` 等字段进行逻辑隔离。
+
+#### 1.11.3 与后续文档的关系
+
+- 在《通用智能治理框架总纲》中，“标准记忆模块”将作为每个 Agent 的内建组件出现；
+- 在《智能治理2-Agent工厂与配置系统设计文档》中，将进一步定义：
+  - Agent Profile 中的组织/业务/职责字段；
+  - 记忆模块的策略配置项（Section/Memory0 的启用方式与参数）；
+  - Agent 与标签系统、空间体系的默认绑定关系。
+
+本节的目标是：在记忆系统这一层明确“入库通道”的角色——它是挂载在 Agent 上的标准记忆模块，而不是独立于 Agent 的系统总线。
+
 ---
 
 ## 2. 数据表设计
@@ -790,6 +981,12 @@ ALTER TABLE entries ADD COLUMN is_latest BOOLEAN DEFAULT TRUE;
 ALTER TABLE entries ADD COLUMN agent_id VARCHAR(64);
 ALTER TABLE entries ADD COLUMN source_session_id VARCHAR(64);
 
+-- 为entries表添加Memory0治理相关字段
+ALTER TABLE entries ADD COLUMN importance DECIMAL(3, 2) DEFAULT 1.0;
+ALTER TABLE entries ADD COLUMN usage_count INTEGER DEFAULT 0;
+ALTER TABLE entries ADD COLUMN last_seen_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE entries ADD COLUMN overridden_entry_ids TEXT[];
+
 -- 添加索引
 CREATE INDEX idx_entries_section_id ON entries(section_id);
 CREATE INDEX idx_entries_section_version ON entries(section_id, section_version);
@@ -797,6 +994,8 @@ CREATE INDEX idx_entries_is_latest ON entries(is_latest);
 CREATE INDEX idx_entries_agent_id ON entries(agent_id);
 CREATE INDEX idx_entries_source_session_id ON entries(source_session_id);
 CREATE INDEX idx_entries_scene_tags ON entries USING GIN (scene_tags);
+CREATE INDEX idx_entries_importance ON entries(importance);
+CREATE INDEX idx_entries_overridden_entry_ids ON entries USING GIN (overridden_entry_ids);
 ```
 
 **新增字段说明：**
@@ -808,6 +1007,10 @@ CREATE INDEX idx_entries_scene_tags ON entries USING GIN (scene_tags);
 | `is_latest` | BOOLEAN | 是否为该section的最新版本，RAG检索时过滤 |
 | `agent_id` | VARCHAR(64) | 所属助手ID，标识该条目属于哪个Agent的记忆 |
 | `source_session_id` | VARCHAR(64) | 来源会话ID，用于追溯 |
+| `importance` | DECIMAL(3, 2) | 重要性权重（0.00-9.99），Memory0治理时动态调整 |
+| `usage_count` | INTEGER | 使用次数，记录该条目被检索/引用的次数 |
+| `last_seen_at` | TIMESTAMP WITH TIME ZONE | 最后访问时间，用于记忆老化计算 |
+| `overridden_entry_ids` | TEXT[] | 被此条目覆盖的旧条目ID列表，用于版本链追踪 |
 
 **现有scene_tags分类体系：**
 
@@ -905,14 +1108,15 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
     
     -- 关联引用
-    related_entry_id VARCHAR(64),
-    
-    -- 索引
-    INDEX idx_user_id (user_id),
-    INDEX idx_assistant_id (assistant_id),
-    INDEX idx_status (status),
-    INDEX idx_created_at (created_at)
+    related_entry_id VARCHAR(64)
 );
+
+CREATE INDEX idx_user_id ON chat_sessions(user_id);
+CREATE INDEX idx_assistant_id ON chat_sessions(assistant_id);
+CREATE INDEX idx_status ON chat_sessions(status);
+CREATE INDEX idx_created_at ON chat_sessions(created_at);
+
+COMMENT ON TABLE chat_sessions IS '会话表，存储用户与助手的对话会话';
 
 COMMENT ON TABLE chat_sessions IS '会话表，存储用户与助手的对话会话';
 ```
@@ -932,50 +1136,6 @@ COMMENT ON TABLE chat_sessions IS '会话表，存储用户与助手的对话会
 | `related_entry_id` | VARCHAR(64) | 关联的entries节点ID（可选） |
 
 ### 2.3 qa_query_index 表（Q&A缓存表）
-
-```sql
-CREATE TABLE IF NOT EXISTS chat_messages (
-    -- 主键
-    message_id VARCHAR(64) PRIMARY KEY,
-    
-    -- 会话关联
-    session_id VARCHAR(64) NOT NULL,
-    
-    -- 消息角色和类型
-    role VARCHAR(16) NOT NULL,  -- 'user' | 'assistant' | 'system' | 'tool'
-    msg_type VARCHAR(32),            -- 'question' | 'statement' | 'answer' | 'other'
-    
-    -- 消息内容
-    content TEXT NOT NULL,
-    
-    -- 元数据
-    metadata_json JSONB,
-    
-    -- 时间戳
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 索引
-    INDEX idx_session_id (session_id),
-    INDEX idx_created_at (created_at),
-    INDEX idx_role (role)
-);
-
-COMMENT ON TABLE chat_messages IS '消息表，存储会话中的所有消息';
-```
-
-**字段说明：**
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `message_id` | VARCHAR(64) | 消息唯一标识，建议使用UUID |
-| `session_id` | VARCHAR(64) | 所属会话ID |
-| `role` | VARCHAR(16) | 消息角色：user/assistant/system/tool |
-| `msg_type` | VARCHAR(32) | 消息类型：question/statement/answer/other |
-| `content` | TEXT | 消息内容 |
-| `metadata_json` | JSONB | 消息元数据（如是否被标记为记忆候选） |
-| `created_at` | TIMESTAMP | 创建时间 |
-
-### 2.3 chat_messages 表（消息表）
 
 ```sql
 CREATE TABLE IF NOT EXISTS qa_query_index (
@@ -1009,17 +1169,16 @@ CREATE TABLE IF NOT EXISTS qa_query_index (
     
     -- 时间戳
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    
-    -- 索引
-    INDEX idx_user_id (user_id),
-    INDEX idx_assistant_id (assistant_id),
-    INDEX idx_tenant_id (tenant_id),
-    INDEX idx_status (status),
-    INDEX idx_hit_count (hit_count),
-    INDEX idx_last_hit_at (last_hit_at),
-    INDEX idx_question_embedding USING ivfflat (question_embedding vector_cosine_ops)
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE INDEX idx_user_id ON qa_query_index(user_id);
+CREATE INDEX idx_assistant_id ON qa_query_index(assistant_id);
+CREATE INDEX idx_tenant_id ON qa_query_index(tenant_id);
+CREATE INDEX idx_status ON qa_query_index(status);
+CREATE INDEX idx_hit_count ON qa_query_index(hit_count);
+CREATE INDEX idx_last_hit_at ON qa_query_index(last_hit_at);
+CREATE INDEX idx_question_embedding ON qa_query_index USING ivfflat (question_embedding vector_cosine_ops);
 
 COMMENT ON TABLE qa_query_index IS 'Q&A缓存表，用于快速响应重复问题';
 ```
@@ -1040,6 +1199,109 @@ COMMENT ON TABLE qa_query_index IS 'Q&A缓存表，用于快速响应重复问�
 | `last_hit_at` | TIMESTAMP | 最后命中时间 |
 | `status` | VARCHAR(32) | 状态：active/deprecated/pending_review |
 | `quality_score` | DECIMAL(3,2) | 质量分数 |
+
+### 2.4 chat_messages 表（消息表）
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_messages (
+    -- 主键
+    message_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 会话关联
+    session_id VARCHAR(64) NOT NULL,
+    
+    -- 消息角色和类型
+    role VARCHAR(16) NOT NULL,  -- 'user' | 'assistant' | 'system' | 'tool'
+    msg_type VARCHAR(32),            -- 'question' | 'statement' | 'answer' | 'other'
+    
+    -- 消息内容
+    content TEXT NOT NULL,
+    
+    -- 元数据
+    metadata_json JSONB,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_session_id ON chat_messages(session_id);
+CREATE INDEX idx_created_at ON chat_messages(created_at);
+CREATE INDEX idx_role ON chat_messages(role);
+
+COMMENT ON TABLE chat_messages IS '消息表，存储会话中的所有消息';
+
+COMMENT ON TABLE chat_messages IS '消息表，存储会话中的所有消息';
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `message_id` | VARCHAR(64) | 消息唯一标识，建议使用UUID |
+| `session_id` | VARCHAR(64) | 所属会话ID |
+| `role` | VARCHAR(16) | 消息角色：user/assistant/system/tool |
+| `msg_type` | VARCHAR(32) | 消息类型：question/statement/answer/other |
+| `content` | TEXT | 消息内容 |
+| `metadata_json` | JSONB | 消息元数据（如是否被标记为记忆候选） |
+| `created_at` | TIMESTAMP | 创建时间 |
+
+---
+
+### 2.5 chat_sections 表（片段表）
+
+```sql
+CREATE TABLE IF NOT EXISTS chat_sections (
+    -- 主键
+    section_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 会话关联
+    session_id VARCHAR(64) NOT NULL,
+    
+    -- 片段信息
+    title VARCHAR(256),
+    status VARCHAR(32) NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'archived'
+    trigger_type VARCHAR(32) NOT NULL,  -- 'auto' | 'manual' | 'timeout'
+    message_count INTEGER NOT NULL DEFAULT 0,
+    
+    -- 摘要
+    summary_content TEXT,
+    summary_entry_id VARCHAR(64),
+    
+    -- 代理关联
+    agent_id VARCHAR(64) NOT NULL,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX idx_chat_sections_session_id ON chat_sections(session_id);
+CREATE INDEX idx_chat_sections_status ON chat_sections(status);
+CREATE INDEX idx_chat_sections_trigger_type ON chat_sections(trigger_type);
+CREATE INDEX idx_chat_sections_agent_id ON chat_sections(agent_id);
+CREATE INDEX idx_chat_sections_created_at ON chat_sections(created_at);
+CREATE INDEX idx_chat_sections_completed_at ON chat_sections(completed_at);
+
+COMMENT ON TABLE chat_sections IS '聊天片段表，用于聚合和管理会话中的片段';
+```
+
+**字段说明：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `section_id` | VARCHAR(64) | 片段唯一标识 |
+| `session_id` | VARCHAR(64) | 所属会话ID |
+| `title` | VARCHAR(256) | 片段标题 |
+| `status` | VARCHAR(32) | 状态：active/completed/archived |
+| `trigger_type` | VARCHAR(32) | 触发类型：auto/manual/timeout |
+| `message_count` | INTEGER | 包含的消息数量 |
+| `summary_content` | TEXT | 片段摘要内容 |
+| `summary_entry_id` | VARCHAR(64) | 关联的摘要条目ID |
+| `agent_id` | VARCHAR(64) | 代理ID |
+| `created_at` | TIMESTAMP | 创建时间 |
+| `updated_at` | TIMESTAMP | 更新时间 |
+| `completed_at` | TIMESTAMP | 完成时间 |
 
 ---
 
@@ -1805,7 +2067,107 @@ class SectionService:
         return [random.random() for _ in range(1536)]
 ```
 
-### 3.4 EntryService 设计
+### 3.4 Section切分与知识梳理策略（多Agent + 异步治理）
+
+#### 3.4.1 目标
+
+SectionService 的目标不仅是“把一段消息总结一下”，而是：
+
+- 在**语义上合理**地将 `chat_messages` 切分为若干 section（议题片段）；
+- 为每个 section 生成高质量的整理结果（候选知识片段）；
+- 将这些候选知识交给 Memory0 做长期记忆治理；
+- 在后台**持续重构 section 与 entries 之间的关联网络**。
+
+#### 3.4.2 多 Agent 协同框架（语义主导，而非硬规则）
+
+系统采用多 Agent 协同的方式，而不是依赖单一规则或单一模型：
+
+1. **Agent1：局部 Section 识别 Agent**
+
+   - 输入：某会话下最近一段 `chat_messages`。
+   - 职责：
+     - 基于局部语境，判断当前是否应结束当前 section 或开启新 section；
+     - 给出初步的 section 边界和简短“切分理由”。
+   - 特点：
+     - 强调“就近语义连续性”；
+     - 能识别诸如“这一段先到这里”“我们换个话题”等显式结束语。
+
+2. **Agent2：宏观复核 + 话题标签 Agent**
+
+   - 输入：Agent1 提议的 section 片段 + 更长时间窗口内的会话上下文。
+   - 职责：
+     - 复核并修正 Agent1 的切分：
+       - 合并过碎的 section；
+       - 拆分明显跨多个主题的长 section；
+     - 为每个 section 打上话题/项目/任务等标签（与 `scene_tags` 设计对齐）；
+     - 初步建立 section 与既有 entries 之间的关联（如相关条目 ID 列表）。
+   - 特点：
+     - 同时承担“交叉检验”和“第一轮关联重构”的职责。
+
+3. **Agent3（可选）：多视角关联重构 Agent**
+
+   - 输入：一批已入库的 section 总结 + 现有 entries 的相关记录。
+   - 职责：
+     - 从项目/任务流/角色/外部文档等不同视角出发，进一步：
+       - 调整话题标签；
+       - 建立或修正跨 section、跨时间的关联关系；
+       - 标记关联类型（例子/补充/反例/修订/引用等）。
+   - 运行方式：
+     - 通常作为后台周期任务运行，对历史 section 做**长期异步重刷**。
+
+#### 3.4.3 Section 总结与 Memory0 的衔接
+
+- SectionService 当前的 `summarize_section()` 实现可以视为对上述多 Agent 逻辑的一个封装：
+  - 收集本次需要整理的消息集合；
+  - 利用 LLM/Agent 生成摘要与候选知识；
+  - 写入 entries（第 1 次写库）；
+  - 写入/更新 `chat_sections`（状态、触发类型、message_count、summary_entry_id 等）。
+- 后续 Memory0 流程：
+  - 基于写入的 entries 记录生成 Memory0 任务；
+  - Memory0 在后台执行长期记忆治理（第 2 次写库），见 1.10/3.4 描述。
+
+#### 3.4.4 触发策略与兜底机制
+
+Section 整理的触发策略分两层：
+
+1. **语义主导（推荐路径）**
+
+   - Section 结束/开始主要由多 Agent 的语义判定完成：
+     - 考虑显式结束语（“先到这儿”“换个话题”等）；
+     - 结合消息内容、角色、上下文标签等因素，判断是否开启新 section。
+   - 显式语义指令**不需要**再单独写成硬编码规则：
+     - 在 Agent 提示词中将其作为“强信号示例”即可；
+     - 最终仍由多 Agent 综合语义做决策。
+
+2. **可配置自动触发（工程兜底，不直接硬切分）**
+
+   - 在 1.2/1.3 章节中提到的“可配置的消息数量或时间间隔”，在实现中对应：
+     - `AUTO_MESSAGE_COUNT`：基于消息数量的自动触发；
+     - `AUTO_TIME`：基于时间间隔的自动触发。
+   - 设计原则：
+     - 配置项用于**触发一次 Section 整理任务**或“高优先级重评估”，
+     - 而非简单按条数/时间直接硬切分为多个物理 section；
+     - 具体切分仍由多 Agent 的语义判断完成。
+
+> 总结：
+> - Section 边界的判定以语义和多 Agent 共识为主；
+> - 消息数量/时间间隔只是**触发一次整理/重评估**的机会，而不是最终边界规则。
+
+#### 3.4.5 知识关联的持续重构
+
+- 除首次切分与总结外，多 Agent 会在后台定期对历史 section 与 entries 进行重新浏览：
+  - 调整话题标签与 `scene_tags`；
+  - 重建或清理关联关系（例如 future 的 `related_entry_ids/relation_type` 字段）；
+  - 配合 Memory0 更新重要度与状态。
+- 这样，知识系统在时间维度上具备：
+  - **内容层的演化**（通过 Memory0：新旧/覆盖/强化）；
+  - **结构层/关联层的演化**（通过多 Agent：标签、话题树、关联图的重构）。
+
+> 本节为长期演进预留了空间：
+> - 初期可以仅实现 `summarize_section()` + 简单标签生成；
+> - 随着系统成熟，再引入 Agent2/Agent3 和更加复杂的异步重刷逻辑。
+
+### 3.5 EntryService 设计
 
 ```python
 """
@@ -2242,7 +2604,113 @@ class EntryService:
         return [random.random() for _ in range(1536)]
 ```
 
-### 3.5 QACacheService 设计
+### 3.6 Memory0Service 设计
+
+#### 3.6.1 职责边界
+
+`Memory0Service` 是长期记忆治理模块，运行在 `entries` + `entry_embeddings` 之上，职责包括：
+
+- 接收候选知识片段（通常来自 SectionService 的整理结果，或显式“请记住”操作）；
+- 在指定 user/agent/space 范围内，从 `entries` 中检索相似的既有记忆（向量检索 + 结构过滤）；
+- 判定候选知识与既有记忆的关系：
+  - **新知识**：新增长期记忆条目；
+  - **旧知识强化**：不新增记录，仅更新旧条的 `importance/last_seen_at/usage_count` 等；
+  - **规则更新/冲突**：新增一条“新版规则”，并将旧条标记为 `deprecated/overridden`，记录覆盖链关系；
+- 通过 `EntryService` 将上述结果写回 `entries`，形成**带状态与权重的长期记忆视图**。
+
+#### 3.6.2 依赖关系与入库方式
+
+- 依赖组件：
+  - `EntryService`：统一的 `entries` 读写与向量检索封装；
+  - 数据库客户端：`pgvector_client`（用于执行 SQL/向量查询）。
+- 写入约束：
+  - Memory0Service **不直接操作表**，所有写入/更新均通过 `EntryService` 完成；
+  - 即：
+    - 第一次写库：由 SectionService 等调用 `EntryService.create_entry(...)`；
+    - 第二次写库：由 Memory0Service 再次调用 `EntryService` 更新/新增记录。
+
+#### 3.6.3 核心数据结构（示意）
+
+```python
+from dataclasses import dataclass
+from enum import Enum
+from typing import Dict, Any, List, Optional
+
+
+class MemoryRelation(str, Enum):
+    NEW = "new"
+    UPDATE = "update"
+    OVERRIDE = "override"
+    DUPLICATE = "duplicate"
+
+
+@dataclass
+class MemoryCandidate:
+    content: str
+    user_id: str
+    agent_id: str
+    scene_tags: Dict[str, List[str]]
+    space_type: str
+    metadata: Dict[str, Any]
+
+
+@dataclass
+class MemoryResult:
+    relation: MemoryRelation
+    entry_id: str
+    overridden_entry_ids: List[str]
+    metadata: Dict[str, Any]
+```
+
+#### 3.6.4 核心接口（示意）
+
+```python
+class Memory0Service:
+    """长期记忆治理服务（Memory0）"""
+
+    def __init__(self, entry_service):
+        self.entry_service = entry_service
+
+    def upsert_memory(self, candidate: MemoryCandidate) -> MemoryResult:
+        """
+        将候选知识写入长期记忆视图（可能是新增/强化/覆盖）
+
+        步骤：
+        1. 基于 candidate.content 生成向量，调用 entry_service 在指定 user/agent/scene 范围内检索相似条目；
+        2. 对比相似条目的 content / metadata，判定：
+           - NEW: 无显著相似 → 新增；
+           - UPDATE: 语义一致但信息更丰富 → 更新原条的权重/时间戳等；
+           - OVERRIDE: 语义冲突/规则更新 → 新增新条，并标记旧条为 deprecated/overridden；
+           - DUPLICATE: 几乎完全重复 → 仅做次数/时间更新；
+        3. 通过 entry_service 调用，将结果写回 entries。
+        """
+        ...
+
+    def process_entry(self, entry_id: str) -> MemoryResult:
+        """
+        针对已存在的 entries 记录执行记忆治理（用于异步任务消费）。
+        通常由后台 Worker 在接收到 Memory0 任务后调用。
+        """
+        ...
+```
+
+> 说明：
+> - 实现细节（相似度阈值、冲突判定策略、权重更新公式）可在代码层细化；
+> - 这里的设计重点是：Memory0 只通过 `EntryService` 与底层表交互，保持与统一入库通道的对齐。
+
+#### 3.6.5 与 SectionService 的协作关系
+
+- SectionService 在 `summarize_section()` 中完成：
+  - 收集 `chat_messages`；
+  - 调用 LLM 完成整理；
+  - 写入 entries（第一次写库）；
+  - 写入/更新 `chat_sections`。
+- Memory0Service 则在后台异步任务中完成：
+  - 读取刚写入的 entries（或批量 section 整理结果）；
+  - 运行 `upsert_memory()` 完成长期记忆治理。
+- 二者通过 `EntryService` 解耦，构成“整理 → 入库 → 治理”的完整流水线。
+
+### 3.7 QACacheService 设计
 
 ```python
 """
@@ -2523,6 +2991,164 @@ class QACacheService:
 
 **目标：** 创建所有必要的数据表和索引
 
+**SQL迁移脚本：**
+
+```sql
+-- 启用pgvector扩展（如未启用）
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 创建chat_sessions表
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    -- 主键
+    session_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 用户和助手关联
+    user_id VARCHAR(64) NOT NULL,
+    assistant_id VARCHAR(64) NOT NULL,
+    
+    -- 会话元数据
+    title VARCHAR(256),
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    metadata_json JSONB,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    
+    -- 关联引用
+    related_entry_id VARCHAR(64)
+);
+
+-- 创建chat_messages表
+CREATE TABLE IF NOT EXISTS chat_messages (
+    -- 主键
+    message_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 会话关联
+    session_id VARCHAR(64) NOT NULL,
+    
+    -- 消息角色和类型
+    role VARCHAR(16) NOT NULL,  -- 'user' | 'assistant' | 'system' | 'tool'
+    msg_type VARCHAR(32),            -- 'question' | 'statement' | 'answer' | 'other'
+    
+    -- 消息内容
+    content TEXT NOT NULL,
+    
+    -- 元数据
+    metadata_json JSONB,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 创建chat_sections表
+CREATE TABLE IF NOT EXISTS chat_sections (
+    -- 主键
+    section_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 会话关联
+    session_id VARCHAR(64) NOT NULL,
+    
+    -- 片段信息
+    title VARCHAR(256),
+    status VARCHAR(32) NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'archived'
+    trigger_type VARCHAR(32) NOT NULL,  -- 'auto' | 'manual' | 'timeout'
+    message_count INTEGER NOT NULL DEFAULT 0,
+    
+    -- 摘要
+    summary_content TEXT,
+    summary_entry_id VARCHAR(64),
+    
+    -- 代理关联
+    agent_id VARCHAR(64) NOT NULL,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+-- 创建qa_query_index表
+CREATE TABLE IF NOT EXISTS qa_query_index (
+    -- 主键
+    qa_id VARCHAR(64) PRIMARY KEY,
+    
+    -- 用户和助手关联
+    user_id VARCHAR(64) NOT NULL,
+    assistant_id VARCHAR(64),
+    tenant_id VARCHAR(64),
+    
+    -- 问题信息
+    normalized_question TEXT NOT NULL,
+    question_embedding vector(1536),
+    
+    -- 答案关联
+    answer_entry_id VARCHAR(64) NOT NULL,
+    answer_type VARCHAR(32),  -- 'cached' | 'generated'
+    
+    -- 命中统计
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    last_hit_at TIMESTAMP WITH TIME ZONE,
+    
+    -- 状态和质量
+    status VARCHAR(32) NOT NULL DEFAULT 'active',  -- 'active' | 'deprecated' | 'pending_review'
+    quality_score DECIMAL(3,2),
+    
+    -- 元数据
+    tags VARCHAR(256)[],
+    metadata_json JSONB,
+    
+    -- 时间戳
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 扩展entries表
+ALTER TABLE entries ADD COLUMN section_id VARCHAR(64);
+ALTER TABLE entries ADD COLUMN section_version INTEGER DEFAULT 1;
+ALTER TABLE entries ADD COLUMN is_latest BOOLEAN DEFAULT TRUE;
+ALTER TABLE entries ADD COLUMN agent_id VARCHAR(64);
+ALTER TABLE entries ADD COLUMN source_session_id VARCHAR(64);
+
+-- 为entries表添加Memory0治理相关字段
+ALTER TABLE entries ADD COLUMN importance DECIMAL(3, 2) DEFAULT 1.0;
+ALTER TABLE entries ADD COLUMN usage_count INTEGER DEFAULT 0;
+ALTER TABLE entries ADD COLUMN last_seen_at TIMESTAMP WITH TIME ZONE;
+ALTER TABLE entries ADD COLUMN overridden_entry_ids TEXT[];
+
+-- 创建索引
+CREATE INDEX idx_user_id ON chat_sessions(user_id);
+CREATE INDEX idx_assistant_id ON chat_sessions(assistant_id);
+CREATE INDEX idx_status ON chat_sessions(status);
+CREATE INDEX idx_created_at ON chat_sessions(created_at);
+
+CREATE INDEX idx_session_id ON chat_messages(session_id);
+CREATE INDEX idx_created_at ON chat_messages(created_at);
+CREATE INDEX idx_role ON chat_messages(role);
+
+CREATE INDEX idx_chat_sections_session_id ON chat_sections(session_id);
+CREATE INDEX idx_chat_sections_status ON chat_sections(status);
+CREATE INDEX idx_chat_sections_trigger_type ON chat_sections(trigger_type);
+CREATE INDEX idx_chat_sections_agent_id ON chat_sections(agent_id);
+CREATE INDEX idx_chat_sections_created_at ON chat_sections(created_at);
+CREATE INDEX idx_chat_sections_completed_at ON chat_sections(completed_at);
+
+CREATE INDEX idx_user_id ON qa_query_index(user_id);
+CREATE INDEX idx_assistant_id ON qa_query_index(assistant_id);
+CREATE INDEX idx_tenant_id ON qa_query_index(tenant_id);
+CREATE INDEX idx_status ON qa_query_index(status);
+CREATE INDEX idx_hit_count ON qa_query_index(hit_count);
+CREATE INDEX idx_last_hit_at ON qa_query_index(last_hit_at);
+CREATE INDEX idx_question_embedding ON qa_query_index USING ivfflat (question_embedding vector_cosine_ops);
+
+CREATE INDEX idx_entries_section_id ON entries(section_id);
+CREATE INDEX idx_entries_section_version ON entries(section_id, section_version);
+CREATE INDEX idx_entries_is_latest ON entries(is_latest);
+CREATE INDEX idx_entries_agent_id ON entries(agent_id);
+CREATE INDEX idx_entries_source_session_id ON entries(source_session_id);
+CREATE INDEX idx_entries_scene_tags ON entries USING GIN (scene_tags);
+```
+
 **任务：**
 - [ ] 4.1.1 创建`chat_sessions`表
 - [ ] 4.1.2 创建`chat_messages`表
@@ -2649,6 +3275,31 @@ class QACacheService:
 - 性能测试满足要求
 - 多用户隔离正确
 - 集成文档完整
+
+---
+
+### 4.7 阶段七：Memory0Service实现（第10-12天）
+
+**目标：** 实现长期记忆治理服务，完成记忆的二次治理
+
+**任务：**
+- [ ] 4.7.1 创建`memory0_service.py`文件
+- [ ] 4.7.2 实现`upsert_memory()`方法（核心方法）
+- [ ] 4.7.3 实现`process_entry()`方法（异步任务处理）
+- [ ] 4.7.4 实现相似度检索逻辑
+- [ ] 4.7.5 实现关系判定逻辑（NEW/UPDATE/OVERRIDE/DUPLICATE）
+- [ ] 4.7.6 实现权重更新逻辑
+- [ ] 4.7.7 实现版本链管理逻辑
+- [ ] 4.7.8 编写单元测试
+- [ ] 4.7.9 集成到后台Worker
+
+**验收标准：**
+- 所有方法实现完成
+- 单元测试通过
+- 集成测试通过
+- 代码符合PEP8规范
+- 有完整的类型注解和文档字符串
+- 记忆治理逻辑正确
 
 ---
 
@@ -3148,7 +3799,80 @@ class TestSessionService(unittest.TestCase):
         self.assertEqual(messages[1].role, MessageRole.ASSISTANT)
 ```
 
+### 7.1.2 SectionService单元测试
+
+（测试SectionService的创建、更新、合并片段等功能）
+
+### 7.1.3 EntryService单元测试
+
+（测试EntryService的增删改查、向量检索等功能）
+
+### 7.1.4 QACacheService单元测试
+
+（测试QACacheService的缓存命中、更新、淘汰等功能）
+
+### 7.2 集成测试
+
+1. **数据库连接测试**：验证所有表CRUD操作。
+2. **服务间集成测试**：验证SessionService、SectionService、EntryService之间的协作。
+3. **RAG管道测试**：验证从检索到生成答案的完整流程。
+4. **MCP工具集成测试**：验证通过MCP工具访问记忆节点的功能。
+
+### 7.3 性能测试
+
+1. **向量检索性能**：测试在不同数据量下的检索延迟。
+2. **并发会话处理**：模拟多用户同时创建会话和发送消息。
+3. **缓存命中率**：测试QA缓存对响应时间的影响。
+4. **内存与CPU使用**：监控服务在负载下的资源消耗。
+
 ---
+
+### 7.4 环境配置与依赖
+
+#### 7.4.1 系统要求
+
+- **操作系统**：Linux (推荐 Ubuntu 22.04)、macOS、Windows (WSL2)
+- **Python版本**：3.9+
+- **PostgreSQL版本**：14+ (支持 pgvector 扩展)
+- **内存**：建议至少 4GB RAM
+- **磁盘空间**：根据向量数据量预留足够空间
+
+#### 7.4.2 Python依赖包
+
+```txt
+# requirements.txt
+psycopg2-binary>=2.9.5
+pgvector>=0.2.0
+numpy>=1.21.0
+openai>=1.0.0  # 用于嵌入生成（如使用）
+sentence-transformers>=2.2.0  # 备用嵌入模型
+fastapi>=0.104.0  # 若提供Web服务
+uvicorn>=0.24.0
+pydantic>=2.0.0
+```
+
+#### 7.4.3 数据库配置
+
+1. 安装 PostgreSQL 并启用 pgvector 扩展：
+   ```bash
+   CREATE EXTENSION vector;
+   ```
+
+2. 创建数据库和用户，授予相应权限。
+
+3. 环境变量配置（在 .env 文件中设置）：
+   ```bash
+   DATABASE_URL=postgresql://user:password@host:port/database
+   EMBEDDING_MODEL=text-embedding-3-small  # 或本地模型
+   OPENAI_API_KEY=sk-...  # 如使用OpenAI嵌入
+   ```
+
+#### 7.4.4 服务配置
+
+- **SessionService**：无需额外配置。
+- **SectionService**：可配置片段合并的LLM服务端点（如本地Ollama）。
+- **EntryService**：向量索引参数（IVFFlat列表数、HNSW M值等）。
+- **QACacheService**：缓存大小、TTL、淘汰策略。
 
 ## 8. 部署说明
 
@@ -3304,5 +4028,118 @@ python -m ai_factory.web.app
 | 获取统计 | GET | /api/qa/cache/user/{user_id}/stats | 获取用户Q&A统计 |
 
 ---
+
+## 9. 当前实现状态 vs 目标设计
+
+**更新时间:** 2026-01-16
+
+本章节记录当前代码实现与设计文档之间的差异，方便后续开发者理解实现状态与目标设计的差距。
+
+### 9.1 已实现的核心功能（方案 A：最小可行流水线）
+
+以下功能已完整实现，与设计文档基本一致：
+
+| 功能模块 | 实现文件 | 状态 | 说明 |
+|---------|---------|------|------|
+| **EntryService** | `agents/memory/entry_service.py` | ✅ 完整实现 | `create_entry`, `get_entry`, `search_similar`, `update_entry`, `delete_entry`, `get_agent_entries`, `get_section_entries` |
+| **SessionService** | `agents/memory/session_service.py` | ✅ 完整实现 | `create_session`, `append_message`, `get_recent_messages`, `get_session_info`, `get_session_history`, `update_session`, `archive_session`, `delete_session` |
+| **SectionService** | `agents/memory/section_service.py` | ✅ 完整实现 | `summarize_section`, `get_section_history`, `merge_sections` |
+| **Memory0Service** | `agents/memory/memory0_service.py` | ✅ 完整实现 | `upsert_memory`, `process_entry`, NEW/UPDATE/OVERRIDE/DUPLICATE 判定逻辑 |
+| **MemoryService** | `agents/memory/memory_service.py` | ✅ 完整实现 | `get_context_for_turn`, `remember_explicitly`, `append_message`, `summarize_section` |
+| **VectorClient** | `agents/memory/vector_client.py` | ✅ 完整实现 | `search_entries`, `upsert_embedding`, `get_embedding`, `delete_embedding` |
+| **数据库表结构** | `agents/memory/create_memory_tables.sql` | ✅ 完整实现 | `chat_sessions`, `chat_messages`, `chat_sections`, `qa_query_index`, `entries` 扩展 |
+| **模块导出** | `agents/memory/__init__.py` | ✅ 完整实现 | 所有服务和数据类的导出，`create_memory_stack()` 便捷函数 |
+| **端到端测试** | `agents/memory/test_memory_pipeline.py` | ✅ 完整实现 | 7 组测试用例覆盖完整流水线 |
+
+**流水线完整性：**
+- ✅ **写路径**：`SessionService.append_message()` → `SectionService.summarize_section()` → `EntryService.create_entry()` → `Memory0Service.upsert_memory()`
+- ✅ **读路径**：`SessionService.get_recent_messages()` → `EntryService.search_similar()` → `MemoryService.get_context_for_turn()`
+
+### 9.2 简化实现的部分（功能可用，但未完全按设计）
+
+以下功能已实现基本逻辑，但与设计文档中的完整方案存在差距：
+
+| 功能模块 | 设计文档要求 | 当前实现 | 差距说明 |
+|---------|-------------|---------|---------|
+| **Section 多 Agent 语义切分** | 3.4 节定义了 3 个 Agent 协同：<br>- Agent1：局部 Section 识别<br>- Agent2：宏观复核 + 话题标签<br>- Agent3：多视角关联重构 | 当前为简化版：<br>- `_generate_section_id()`：直接生成新 UUID<br>- `_generate_section_title()`：调用 LLM 生成标题<br>- `_summarize_with_llm()`：调用 LLM 生成摘要<br>- `_generate_scene_tags()`：调用 LLM 生成标签 | **已集成 LLM 服务**：已通过 `LLMClient` 集成 DashScope Embedding 和 DeepSeek LLM，但多 Agent 协同逻辑仍为简化版 |
+| **Section LLM 调用** | 应调用 LLM 生成：<br>- Section 标题<br>- Section 摘要<br>- Scene 标签 | **✅ 已完成**：<br>- `_generate_section_title()`：通过 `LLMClient.chat_completion()` 调用 DeepSeek LLM<br>- `_summarize_with_llm()`：通过 `LLMClient.summarize_messages()` 调用 DeepSeek LLM<br>- `_generate_scene_tags()`：通过 `LLMClient.generate_scene_tags()` 调用 DeepSeek LLM | **已完成并联调通过**：使用 DeepSeek API (deepseek-chat) 进行 LLM 调用 |
+| **Embedding 生成** | 应调用 embedding 服务生成向量 | **✅ 已完成**：<br>- `_generate_embedding()`：通过 `LLMClient.generate_embedding()` 调用 DashScope Embedding API (qwen3-embedding) | **已完成并联调通过**：使用 DashScope API (qwen3-embedding:4b) 生成 1536 维向量 |
+
+### 9.3 尚未实现的功能（设计文档中有定义，但代码中缺失）
+
+以下功能在设计文档中有完整定义，但当前代码中尚未实现：
+
+| 功能模块 | 设计文档位置 | 缺失内容 | 优先级 | 状态 |
+|---------|-------------|---------|--------|------|
+| **QACacheService** | 3.7 节 | 完整的 `QACacheService` 类：<br>- `cache_qa()`<br>- `query_qa()`<br>- `hit_qa()`<br>- `deprecate_qa()`<br>- `get_user_qa_stats()`<br>- `cleanup_old_qa()` | 中 | ⏳ 待实现 |
+| **后台 Worker** | 1.10.2 节、4.7.9 节 | 异步消费 Memory0 任务的 Worker 实现：<br>- 从队列读取 Memory0 任务<br>- 调用 `Memory0Service.process_entry()`<br>- 错误处理与重试机制 | 高 | ✅ 已完成并联调通过 |
+| **任务队列** | 1.10.2 节 | Memory0 任务队列的实现：<br>- 任务提交接口<br>- 任务消费接口<br>- 任务状态跟踪 | 高 | ✅ 已完成并联调通过 |
+| **配置集中化** | 1.10.2 节 | Memory0 配置模块：<br>- `SIM_THRESHOLD_LOW` / `SIM_THRESHOLD_HIGH`<br>- `CONFLICT_KEYWORDS`<br>- 不同 Agent/场景的 Memory0 profile | 中 | ⏳ 待实现 |
+
+### 9.4 与设计文档不一致的地方（语义或实现差异）
+
+以下功能已实现，但与设计文档存在语义或实现上的差异：
+
+| 差异项 | 设计文档定义 | 当前实现 | 影响 | 建议修正 |
+|-------|-------------|---------|------|---------|
+| **Section `trigger_type` 取值** | SQL 注释中定义为：`'auto' \| 'manual' \| 'timeout'` | 代码中实际使用：`'mcp_tool'`, `'auto_message_count'`, `'auto_time'`, `'manual'` | 不影响运行（字段为 VARCHAR），但语义不一致 | **建议**：统一代码中的 `trigger_type` 值到 `auto/manual/timeout`，或在 SQL 注释中补充说明 |
+| **Memory0 相似度阈值过滤** | 设计意图：在 DB 层通过 `threshold` 参数过滤低相似度结果 | 当前实现：在 Python 侧比较 `similarity` 字段与 `SIM_THRESHOLD_LOW/HIGH` | 功能等价，但性能略低（DB 层过滤更高效） | **建议**：在 `Memory0Service.upsert_memory()` 中调用 `search_similar()` 时传入 `threshold` 参数 |
+| **Section 触发策略** | 3.4.4 节：消息数量/时间间隔是"触发整理任务"的信号，而非直接切分边界 | 当前实现：`SectionTrigger` 枚举包含 `AUTO_MESSAGE_COUNT` 和 `AUTO_TIME`，但未实现自动触发逻辑 | 功能缺失 | **建议**：实现定时任务或消息计数器，在达到阈值时触发 `summarize_section()` |
+
+### 9.5 实现架构差异
+
+| 差异项 | 设计文档 | 当前实现 | 说明 |
+|-------|---------|---------|------|
+| **目录结构** | 3.1 节：`ai-factory/domain/` | `ai-factory/agents/memory/` | 当前目录结构更符合"以 Agent 为中心"的设计理念，是合理的演进 |
+| **EntryService 方法名** | 设计文档：`save_entry()`, `retrieve_entries()` | 当前实现：`create_entry()`, `search_similar()` | 方法名更清晰，但与设计文档不一致 |
+
+### 9.6 后续实现优先级
+
+根据功能重要性和依赖关系，建议按以下优先级继续实现：
+
+| 优先级 | 功能模块 | 说明 | 预计工作量 | 状态 |
+|-------|---------|------|----------|------|
+| **P0** | 集成实际 LLM 服务 | 替换 SectionService 中的占位实现 | 2-3 天 | ✅ 已完成并联调通过 |
+| **P0** | 集成实际 Embedding 服务 | 替换所有 `_generate_embedding()` 占位实现 | 1-2 天 | ✅ 已完成并联调通过 |
+| **P1** | 实现后台 Worker | 异步消费 Memory0 任务 | 3-4 天 | ✅ 已完成并联调通过 |
+| **P1** | 实现任务队列 | Memory0 任务提交与消费 | 2-3 天 | ✅ 已完成并联调通过 |
+| **P2** | 实现 QACacheService | Q&A 缓存服务 | 2-3 天 | ✅ 已完成并联调通过 |
+| **P2** | 配置集中化 | Memory0 配置模块 | 1 天 | ✅ 已完成并联调通过 |
+| **P3** | 统一 `trigger_type` 取值 | 修复 Section 触发类型语义不一致 | 0.5 天 | ✅ 已完成并联调通过 |
+
+### 9.7 总结
+
+- **方案 A：最小可行流水线** 已完整实现，核心功能与设计文档基本一致
+- **方案 B：Memory0 判定策略细化** 的框架已实现，但多 Agent 协同部分为简化版
+- **P0：LLM/Embedding 集成** ✅ 已完成并联调通过
+  - 已实现 `LLMClient` 类，集成 DashScope Embedding (qwen3-embedding:4b) 和 DeepSeek LLM (deepseek-chat)
+  - 已修复 DashScope Embedding 协议问题，使用 OpenAI 兼容格式
+  - 已优化 `create_memory_stack()` 共享 VectorClient 实例
+  - 已更新模块导出，包含 LLMClient、LLMConfig、EmbeddingConfig、get_llm_client
+- **P1：任务队列 & Worker** ✅ 已完成并联调通过
+  - 已创建 `memory_tasks` 表结构（PostgreSQL 兼容索引语法）
+  - 已实现 `TaskQueue` 抽象和 `PostgresTaskQueue` 实现
+  - 已实现 `Memory0Worker` 类，支持多线程、心跳、清理、重试机制
+  - 已修复 `connection_scope` 使用方式和 `INTERVAL` 参数写法
+  - 已集成到 `SectionService`，支持异步 Memory0 处理
+  - 已更新 `create_memory_stack()` 支持 `enable_async_memory0` 和 `task_queue` 参数
+- **P2：QACacheService & 配置集中化** ✅ 已完成并联调通过
+  - 已实现 `QACacheService`，支持 Q&A 缓存、查询、命中记录、统计、清理
+  - 已实现 `ConfigManager`，支持 Agent 配置注册/获取/更新/移除
+  - 已实现 `Memory0Config` 和 `AgentMemoryConfig` 数据类
+  - 已预定义 `MEMORY0_PROFILES`（CONSERVATIVE/AGGRESSIVE/OBSERVANT）
+  - 已修复 `quality_score` 解析问题（支持 dict 和 float 两种格式）
+  - 已修复 `query_qa()` 返回类型（从 Dict 改为 QAInfo 对象）
+- **P3：统一 Section trigger_type 取值** ✅ 已完成并联调通过
+  - 已添加 `SectionTrigger` 枚举（AUTO/MANUAL/TIMEOUT）
+  - 已更新 `SectionService` 默认 `trigger_type` 为 `"auto"`
+  - 已验证枚举值与 SQL 定义一致
+- **端到端集成测试** ✅ 已完成并联调通过
+  - 已编写 11 个测试用例，覆盖完整流水线
+  - 已验证所有服务正常工作（SessionService、SectionService、MemoryService、Memory0Service、QACacheService、ConfigManager）
+  - 已验证异步 Memory0 处理（TaskQueue + Worker）
+- 主要差距在于：
+  1. 多 Agent 语义切分（简化实现）
+- 代码架构更符合"以 Agent 为中心"的设计理念，是合理的演进
 
 **文档结束**
