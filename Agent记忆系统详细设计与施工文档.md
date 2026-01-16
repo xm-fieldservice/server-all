@@ -4105,7 +4105,7 @@ python -m ai_factory.web.app
 | **P1** | 实现任务队列 | Memory0 任务提交与消费 | 2-3 天 | ✅ 已完成并联调通过 |
 | **P2** | 实现 QACacheService | Q&A 缓存服务 | 2-3 天 | ✅ 已完成并联调通过 |
 | **P2** | 配置集中化 | Memory0 配置模块 | 1 天 | ✅ 已完成并联调通过 |
-| **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发 | 0.5 天 | ✅ 已完成并联调通过 |
+| **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发；已修复幂等性/防抖问题 | 0.5 天 | ✅ 已完成并联调通过 |
 
 ### 9.7 总结
 

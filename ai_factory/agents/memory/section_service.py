@@ -219,23 +219,29 @@ class SectionService:
 
         Returns:
             Optional[SectionSummary]: 如果触发了整理，返回整理结果；否则返回 None
-        """
-        # 1. 获取会话的消息数量
-        message_count = self._get_session_message_count(session_id)
 
-        # 2. 获取上次 Section 整理的时间
+        注意：此方法已实现幂等性/防抖逻辑：
+        - 消息数量触发：基于"上次整理时间之后新增的消息数"判断
+        - 时间间隔触发：基于"距离上次整理的时间"判断
+        - 语义触发：每次调用都会检查（因为语义触发是显式用户意图）
+        """
+        # 1. 获取会话的消息总数和上次整理时间
+        message_count = self._get_session_message_count(session_id)
         last_section_time = self._get_last_section_time(session_id)
 
-        # 3. 检查消息数量触发
-        if message_count >= self.section_trigger_message_count:
-            print(f"[SectionService] Message count trigger: {message_count} >= {self.section_trigger_message_count}")
-            return self.summarize_section(
-                session_id=session_id,
-                agent_id=agent_id,
-                trigger_type=SectionTrigger.AUTO.value
-            )
+        # 2. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
+        if last_section_time and message_count >= self.section_trigger_message_count:
+            # 获取上次整理时间之后新增的消息数
+            new_message_count = self._get_session_message_count_since(session_id, last_section_time)
+            if new_message_count >= self.section_trigger_message_count:
+                print(f"[SectionService] Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
+                return self.summarize_section(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    trigger_type=SectionTrigger.AUTO.value
+                )
 
-        # 4. 检查时间间隔触发
+        # 3. 检查时间间隔触发
         if last_section_time:
             time_since_last = (datetime.now() - last_section_time).total_seconds()
             if time_since_last >= self.section_trigger_time_interval:
@@ -246,7 +252,7 @@ class SectionService:
                     trigger_type=SectionTrigger.TIMEOUT.value
                 )
 
-        # 5. 检查语义触发（如果有用户消息）
+        # 4. 检查语义触发（如果有用户消息）
         if user_message and self._check_semantic_trigger(user_message):
             print(f"[SectionService] Semantic trigger detected in message: {user_message[:50]}...")
             return self.summarize_section(
@@ -685,6 +691,27 @@ class SectionService:
                     FROM chat_messages
                     WHERE session_id = %s
                 """, (session_id,))
+
+                result = cur.fetchone()
+                return result[0] if result else 0
+
+    def _get_session_message_count_since(self, session_id: str, since_time: datetime) -> int:
+        """获取会话在指定时间之后新增的消息数量。
+
+        Args:
+            session_id: 会话ID
+            since_time: 起始时间
+
+        Returns:
+            int: 新增的消息数量
+        """
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM chat_messages
+                    WHERE session_id = %s AND created_at > %s
+                """, (session_id, since_time))
 
                 result = cur.fetchone()
                 return result[0] if result else 0
