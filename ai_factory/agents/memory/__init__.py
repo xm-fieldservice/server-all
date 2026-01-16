@@ -78,6 +78,7 @@ __all__ = [
     # VectorClient
     "VectorClient",
     # LLMClient
+    "LLMClient",
     "LLMConfig",
     "EmbeddingConfig",
     "get_llm_client",
