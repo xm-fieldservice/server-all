@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from .session_service import SessionService, SessionInfo, MessageInfo
 from .section_service import SectionService, SectionSummary, SectionInfo, SectionTrigger
+# SectionService 的 check_and_trigger_section 方法通过 SectionService 类直接使用
 from .entry_service import EntryService
 from .memory0_service import (
     Memory0Service,
@@ -104,7 +105,10 @@ __all__ = [
 
 def create_memory_stack(
     enable_async_memory0: bool = False,
-    task_queue: Optional[TaskQueue] = None
+    task_queue: Optional[TaskQueue] = None,
+    section_trigger_message_count: int = 10,
+    section_trigger_time_interval: int = 3600,
+    section_trigger_keywords: Optional[List[str]] = None
 ) -> MemoryService:
     """创建完整的记忆栈。
 
@@ -114,6 +118,9 @@ def create_memory_stack(
     Args:
         enable_async_memory0: 是否启用异步 Memory0 处理（默认 False）
         task_queue: 可选的任务队列实例（默认使用 get_task_queue()）
+        section_trigger_message_count: 消息数量触发阈值（默认10条）
+        section_trigger_time_interval: 时间间隔触发阈值（秒，默认3600秒=1小时）
+        section_trigger_keywords: 语义触发关键词列表（默认包含"先到这里"、"换个话题"、"总结一下"等）
 
     Returns:
         MemoryService: 配置好的 MemoryService 实例
@@ -126,7 +133,10 @@ def create_memory_stack(
         entry_service=entry_service,
         vector_client=vector_client,  # 注入共享的 VectorClient
         task_queue=task_queue,      # 注入任务队列
-        enable_async_memory0=enable_async_memory0  # 启用异步 Memory0
+        enable_async_memory0=enable_async_memory0,  # 启用异步 Memory0
+        section_trigger_message_count=section_trigger_message_count,
+        section_trigger_time_interval=section_trigger_time_interval,
+        section_trigger_keywords=section_trigger_keywords
     )
     memory0_service = Memory0Service(
         entry_service=entry_service,

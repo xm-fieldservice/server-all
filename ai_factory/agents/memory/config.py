@@ -59,30 +59,31 @@ class Memory0Config:
 @dataclass
 class AgentMemoryConfig:
     """Agent 记忆配置"""
-    
+
     # Agent 基本信息
     agent_id: str
     agent_name: str
     profile: Memory0Profile = Memory0Profile.CONSERVATIVE
-    
+
     # 记忆策略配置
     enable_section: bool = True           # 是否启用 Section
     enable_memory0: bool = True          # 是否启用 Memory0
     enable_async_memory0: bool = False   # 是否启用异步 Memory0 处理
-    
+
     # Section 触发配置
     section_trigger_message_count: Optional[int] = None  # 基于消息数量的触发阈值
     section_trigger_time_interval: Optional[int] = None  # 基于时间间隔的触发阈值（秒）
-    
+    section_trigger_keywords: Optional[List[str]] = None  # 语义触发关键词列表
+
     # Memory0 配置
     memory0_config: Memory0Config = field(default_factory=Memory0Config)
-    
+
     # 场景标签模板
     scene_tag_templates: Dict[str, List[str]] = field(default_factory=dict)
-    
+
     # 空间类型默认值
     default_space_type: str = "note"
-    
+
     # 元数据
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -279,19 +280,31 @@ def get_config_manager() -> ConfigManager:
 def register_default_agents() -> None:
     """注册一些默认的 Agent 配置"""
     manager = get_config_manager()
-    
+
     # 注册默认 Agent
     manager.register_agent_config(AgentMemoryConfig(
         agent_id="default",
         agent_name="Default Agent",
         profile=Memory0Profile.CONSERVATIVE,
+        section_trigger_message_count=10,
+        section_trigger_time_interval=3600,
+        section_trigger_keywords=[
+            "先到这里",
+            "换个话题",
+            "总结一下",
+            "暂停",
+            "结束",
+            "完成",
+            "就这样",
+            "好了"
+        ],
         scene_tag_templates={
             "execution": ["笔记"],
             "planning": ["项目"]
         },
         default_space_type="note"
     ))
-    
+
     # 注册项目助手 Agent
     manager.register_agent_config(AgentMemoryConfig(
         agent_id="agent_project",
@@ -300,13 +313,24 @@ def register_default_agents() -> None:
         enable_section=True,
         enable_memory0=True,
         section_trigger_message_count=20,
+        section_trigger_time_interval=3600,
+        section_trigger_keywords=[
+            "先到这里",
+            "换个话题",
+            "总结一下",
+            "暂停",
+            "结束",
+            "完成",
+            "就这样",
+            "好了"
+        ],
         scene_tag_templates={
             "execution": ["项目", "任务"],
             "planning": ["项目", "计划"]
         },
         default_space_type="note"
     ))
-    
+
     # 注册聊天助手 Agent
     manager.register_agent_config(AgentMemoryConfig(
         agent_id="agent_chat",
@@ -315,6 +339,17 @@ def register_default_agents() -> None:
         enable_section=True,
         enable_memory0=True,
         section_trigger_message_count=10,
+        section_trigger_time_interval=1800,
+        section_trigger_keywords=[
+            "先到这里",
+            "换个话题",
+            "总结一下",
+            "暂停",
+            "结束",
+            "完成",
+            "就这样",
+            "好了"
+        ],
         scene_tag_templates={
             "execution": ["对话"]
         },

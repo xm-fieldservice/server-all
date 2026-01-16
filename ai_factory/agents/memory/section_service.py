@@ -72,7 +72,10 @@ class SectionService:
         entry_service: EntryService,
         vector_client: Optional[VectorClient] = None,
         task_queue: Optional[TaskQueue] = None,
-        enable_async_memory0: bool = False
+        enable_async_memory0: bool = False,
+        section_trigger_message_count: int = 10,
+        section_trigger_time_interval: int = 3600,
+        section_trigger_keywords: Optional[List[str]] = None
     ):
         """初始化 SectionService。
 
@@ -81,12 +84,27 @@ class SectionService:
             vector_client: 可选的 VectorClient 实例，用于向量检索
             task_queue: 可选的任务队列实例，用于异步 Memory0 处理
             enable_async_memory0: 是否启用异步 Memory0 处理
+            section_trigger_message_count: 消息数量触发阈值（默认10条）
+            section_trigger_time_interval: 时间间隔触发阈值（秒，默认3600秒=1小时）
+            section_trigger_keywords: 语义触发关键词列表（默认包含"先到这里"、"换个话题"、"总结一下"等）
         """
         self.entry_service = entry_service
         self.vector_client = vector_client or VectorClient()
         self.llm_client = get_llm_client()
         self.task_queue = task_queue or get_task_queue()
         self.enable_async_memory0 = enable_async_memory0
+        self.section_trigger_message_count = section_trigger_message_count
+        self.section_trigger_time_interval = section_trigger_time_interval
+        self.section_trigger_keywords = section_trigger_keywords or [
+            "先到这里",
+            "换个话题",
+            "总结一下",
+            "暂停",
+            "结束",
+            "完成",
+            "就这样",
+            "好了"
+        ]
 
     def summarize_section(
         self,
@@ -185,6 +203,60 @@ class SectionService:
                 "section_title": section_title
             }
         )
+
+    def check_and_trigger_section(
+        self,
+        session_id: str,
+        agent_id: str = "default",
+        user_message: Optional[str] = None
+    ) -> Optional[SectionSummary]:
+        """检查是否需要触发 Section 整理，并在满足条件时自动触发。
+
+        Args:
+            session_id: 会话ID
+            agent_id: Agent ID
+            user_message: 可选的用户消息内容，用于语义触发检测
+
+        Returns:
+            Optional[SectionSummary]: 如果触发了整理，返回整理结果；否则返回 None
+        """
+        # 1. 获取会话的消息数量
+        message_count = self._get_session_message_count(session_id)
+
+        # 2. 获取上次 Section 整理的时间
+        last_section_time = self._get_last_section_time(session_id)
+
+        # 3. 检查消息数量触发
+        if message_count >= self.section_trigger_message_count:
+            print(f"[SectionService] Message count trigger: {message_count} >= {self.section_trigger_message_count}")
+            return self.summarize_section(
+                session_id=session_id,
+                agent_id=agent_id,
+                trigger_type=SectionTrigger.AUTO.value
+            )
+
+        # 4. 检查时间间隔触发
+        if last_section_time:
+            time_since_last = (datetime.now() - last_section_time).total_seconds()
+            if time_since_last >= self.section_trigger_time_interval:
+                print(f"[SectionService] Time interval trigger: {time_since_last}s >= {self.section_trigger_time_interval}s")
+                return self.summarize_section(
+                    session_id=session_id,
+                    agent_id=agent_id,
+                    trigger_type=SectionTrigger.TIMEOUT.value
+                )
+
+        # 5. 检查语义触发（如果有用户消息）
+        if user_message and self._check_semantic_trigger(user_message):
+            print(f"[SectionService] Semantic trigger detected in message: {user_message[:50]}...")
+            return self.summarize_section(
+                session_id=session_id,
+                agent_id=agent_id,
+                trigger_type=SectionTrigger.AUTO.value
+            )
+
+        # 没有触发条件满足
+        return None
 
     def get_section_history(
         self,
@@ -596,3 +668,62 @@ class SectionService:
         except Exception as e:
             # 任务提交失败不影响主流程
             print(f"[SectionService] Warning: Failed to enqueue Memory0 task for {entry_id}: {e}")
+
+    def _get_session_message_count(self, session_id: str) -> int:
+        """获取会话的消息数量。
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            int: 消息数量
+        """
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT COUNT(*)
+                    FROM chat_messages
+                    WHERE session_id = %s
+                """, (session_id,))
+
+                result = cur.fetchone()
+                return result[0] if result else 0
+
+    def _get_last_section_time(self, session_id: str) -> Optional[datetime]:
+        """获取会话上次 Section 整理的时间。
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            Optional[datetime]: 上次整理时间，如果没有则返回 None
+        """
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT MAX(updated_at)
+                    FROM chat_sections
+                    WHERE session_id = %s AND status = 'completed'
+                """, (session_id,))
+
+                result = cur.fetchone()
+                return result[0] if result and result[0] else None
+
+    def _check_semantic_trigger(self, message: str) -> bool:
+        """检查消息是否包含语义触发关键词。
+
+        Args:
+            message: 用户消息内容
+
+        Returns:
+            bool: 是否触发
+        """
+        if not message:
+            return False
+
+        # 检查是否包含任何触发关键词
+        for keyword in self.section_trigger_keywords:
+            if keyword in message:
+                return True
+
+        return False
