@@ -4142,4 +4142,32 @@ python -m ai_factory.web.app
   1. 多 Agent 语义切分（简化实现）
 - 代码架构更符合"以 Agent 为中心"的设计理念，是合理的演进
 
+### 9.8 代码路径说明
+
+**当前代码路径**：
+- 权威路径：`ai-factory/ai_factory/agents/memory/`
+- 备份路径：`ai-factory/agents/memory/`（已废弃）
+
+**测试文件导入**：
+- 测试文件：`ai-factory/ai_factory/agents/memory/test_memory_pipeline.py`
+- 导入语句：`from ai_factory.ai_factory.agents.memory import ...`
+- Python 解析路径：`ai-factory` → `agents` → `memory` → `memory/__init__.py`
+
+**DashScope Embedding 配置**：
+- API 模式：原生 API（非兼容模式）
+- Base URL：`https://dashscope.aliyuncs.com/api/v1`
+- API 路径：`/services/embeddings/text-embedding/text-embedding`
+- 模型名称：`text-embedding-v3`
+- 请求格式：`{"model": "...", "input": {"texts": [text]}, "parameters": {"text_type": "document"}}`
+- 响应解析：`result["output"]["embeddings"][0]["embedding"]`
+
+**环境变量**：
+- `EMBEDDING_MODEL_NAME=text-embedding-v3`（已在 .env 中配置）
+- `DASHSCOPE_API_KEY`（已在 .env 中配置）
+
+**LLMClient 事件循环封装**：
+- 使用 `httpx.AsyncClient` + 内部事件循环（`_get_loop().run_until_complete()`）
+- 适合当前同步测试环境
+- 若未来接入 FastAPI/Notebook 等已有事件循环环境，需改为纯 async 调用
+
 **文档结束**
