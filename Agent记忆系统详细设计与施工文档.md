@@ -4061,7 +4061,7 @@ python -m ai_factory.web.app
 
 | 功能模块 | 设计文档要求 | 当前实现 | 差距说明 |
 |---------|-------------|---------|---------|
-| **Section 多 Agent 语义切分** | 3.4 节定义了 3 个 Agent 协同：<br>- Agent1：局部 Section 识别<br>- Agent2：宏观复核 + 话题标签<br>- Agent3：多视角关联重构 | 当前为简化版：<br>- `_generate_section_id()`：直接生成新 UUID<br>- `_generate_section_title()`：调用 LLM 生成标题<br>- `_summarize_with_llm()`：调用 LLM 生成摘要<br>- `_generate_scene_tags()`：调用 LLM 生成标签 | **已集成 LLM 服务**：已通过 `LLMClient` 集成 DashScope Embedding 和 DeepSeek LLM，但多 Agent 协同逻辑仍为简化版 |
+| **Section 多 Agent 语义切分** | 3.4 节定义了 3 个 Agent 协同：<br>- Agent1：局部 Section 识别<br>- Agent2：宏观复核 + 话题标签<br>- Agent3：多视角关联重构 | **✅ 已完成并联调通过**：<br>- 已实现 `SectionAgent` 类，包含 Agent1、Agent2、Agent3<br>- Agent1：`analyze_local_context()` 支持显式结束语检测、LLM 分析、规则分析<br>- Agent2：`review_and_tag_sections()` 支持宏观复核和话题标签生成<br>- Agent3：`refactor_associations()` 预留接口（未实现）<br>- 协同工作流：`analyze_session()` 协调三个 Agent<br>- 已编写 7 个测试用例，全部通过 |
 | **Section LLM 调用** | 应调用 LLM 生成：<br>- Section 标题<br>- Section 摘要<br>- Scene 标签 | **✅ 已完成**：<br>- `_generate_section_title()`：通过 `LLMClient.chat_completion()` 调用 DeepSeek LLM<br>- `_summarize_with_llm()`：通过 `LLMClient.summarize_messages()` 调用 DeepSeek LLM<br>- `_generate_scene_tags()`：通过 `LLMClient.generate_scene_tags()` 调用 DeepSeek LLM | **已完成并联调通过**：使用 DeepSeek API (deepseek-chat) 进行 LLM 调用 |
 | **Embedding 生成** | 应调用 embedding 服务生成向量 | **✅ 已完成**：<br>- `_generate_embedding()`：通过 `LLMClient.generate_embedding()` 调用 DashScope Embedding API (qwen3-embedding) | **已完成并联调通过**：使用 DashScope API (qwen3-embedding:4b) 生成 1536 维向量 |
 
@@ -4107,6 +4107,7 @@ python -m ai_factory.web.app
 | **P2** | 配置集中化 | Memory0 配置模块 | 1 天 | ✅ 已完成并联调通过 |
 | **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发；已修复幂等性/防抖问题；已添加冷却时间窗和异步 Section 整理 | 0.5 天 | ✅ 已完成并联调通过 |
 | **P4** | Memory0 判定策略细化 | LLM-based 关系判定（NEW/UPDATE/OVERRIDE/DUPLICATE） | 2-3 天 | ✅ 已完成并联调通过 |
+| **P5** | 多 Agent 语义切分 | Agent 识别与路由（Agent1/Agent2/Agent3） | 2-3 天 | ✅ 已完成并联调通过 |
 
 ### 9.7 总结
 
@@ -4169,8 +4170,6 @@ python -m ai_factory.web.app
   - 已验证异步 Memory0 处理（TaskQueue + Worker）
   - 已验证 Section 触发策略（消息数量、时间间隔、语义触发）
   - 已验证 LLM-based 关系判定
-- 主要差距在于：
-  1. 多 Agent 语义切分（简化实现）
 - 代码架构更符合"以 Agent 为中心"的设计理念，是合理的演进
 
 ### 9.8 代码路径说明
