@@ -519,6 +519,7 @@ def test_section_trigger_strategy(
     1. 消息数量触发：当上次整理时间之后新增的消息数达到阈值时触发
     2. 时间间隔触发：当距离上次整理的时间达到阈值时触发
     3. 语义触发：当用户消息包含关键词时触发
+    4. 冷却时间窗：触发后会有一段时间的冷却期，防止重复触发
     
     Args:
         session_service: SessionService 实例
@@ -539,7 +540,9 @@ def test_section_trigger_strategy(
         enable_async_memory0=False,
         section_trigger_message_count=3,  # 设置较小的阈值用于测试
         section_trigger_time_interval=2,  # 设置较短的时间间隔（秒）
-        section_trigger_keywords=["总结一下", "换个话题", "先到这里"]
+        section_trigger_cooldown=1,  # 设置较短的冷却时间窗（1秒）用于测试
+        section_trigger_keywords=["总结一下", "换个话题", "先到这里"],
+        enable_async_section_summarize=False  # 先测试同步模式
     )
     
     # 测试 1: 消息数量触发
@@ -579,13 +582,33 @@ def test_section_trigger_strategy(
     assert result is not None, "消息数量达到阈值时应该触发"
     print(f"✓ Section 已创建: {result.section_id}, 触发类型: {result.metadata['trigger_type']}")
     
-    # 测试幂等性：再次检查（不应该再次触发，因为上次整理时间之后新增消息数为 0）
+    # 测试冷却时间窗：立即再次检查（不应该触发，因为还在冷却期内）
     result_2 = custom_section_service.check_and_trigger_section(
         session_id=session_id,
         agent_id="test_agent_trigger"
     )
-    print(f"✓ 幂等性检查: {result_2 is not None} (期望: False)")
-    assert result_2 is None, "幂等性检查：不应该重复触发"
+    print(f"✓ 冷却时间窗检查: {result_2 is not None} (期望: False)")
+    assert result_2 is None, "冷却时间窗检查：不应该重复触发"
+    
+    # 等待冷却时间窗过期
+    import time
+    time.sleep(2)
+    print("✓ 等待 2 秒（超过冷却时间窗 1 秒）")
+    
+    # 添加新消息（达到阈值）
+    session_service.append_message(session_id, "user", "消息 4", "question")
+    session_service.append_message(session_id, "assistant", "回复 4", "answer")
+    session_service.append_message(session_id, "user", "消息 5", "question")
+    print("✓ 添加 3 条新消息")
+    
+    # 检查是否触发（应该触发，因为冷却时间窗已过期且新增消息数达到阈值）
+    result_3 = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 冷却后触发检查: {result_3 is not None} (期望: True)")
+    assert result_3 is not None, "冷却时间窗过期后应该可以再次触发"
+    print(f"✓ Section 已创建: {result_3.section_id}, 触发类型: {result_3.metadata['trigger_type']}")
     
     # 测试 2: 语义触发
     print("\n--- 测试 2: 语义触发 ---")
@@ -650,6 +673,55 @@ def test_section_trigger_strategy(
     )
     print(f"✓ 防抖检查: {result is not None} (期望: False)")
     assert result is None, "防抖逻辑：未达到阈值时不应该触发"
+    
+    # 测试异步 Section 整理
+    print("\n--- 测试 5: 异步 Section 整理 ---")
+    
+    # 创建一个启用异步 Section 整理的 SectionService
+    async_section_service = SectionService(
+        entry_service=EntryService(),
+        vector_client=VectorClient(),
+        task_queue=get_task_queue(),
+        enable_async_memory0=False,
+        section_trigger_message_count=3,
+        section_trigger_time_interval=2,
+        section_trigger_cooldown=1,
+        section_trigger_keywords=["总结一下", "换个话题", "先到这里"],
+        enable_async_section_summarize=True  # 启用异步 Section 整理
+    )
+    
+    # 创建新会话
+    async_session_id = session_service.create_session(
+        user_id="test_user_async",
+        assistant_id="test_agent_async",
+        title="异步整理测试会话"
+    )
+    print(f"✓ 创建会话: {async_session_id}")
+    
+    # 添加 3 条消息（达到阈值）
+    session_service.append_message(async_session_id, "user", "异步消息 1", "question")
+    session_service.append_message(async_session_id, "assistant", "异步回复 1", "answer")
+    session_service.append_message(async_session_id, "user", "异步消息 2", "question")
+    print("✓ 添加 3 条消息")
+    
+    # 检查是否触发（应该触发，但异步模式下不返回结果）
+    async_result = async_section_service.check_and_trigger_section(
+        session_id=async_session_id,
+        agent_id="test_agent_async"
+    )
+    print(f"✓ 异步触发检查: {async_result} (期望: None，因为异步模式不返回结果)")
+    assert async_result is None, "异步模式下不应该立即返回结果"
+    
+    # 检查任务队列
+    task_queue = get_task_queue()
+    pending_tasks = task_queue.get_pending_tasks(limit=10)
+    print(f"✓ 待处理任务数: {len(pending_tasks)} (期望: > 0)")
+    
+    # 验证任务类型
+    if pending_tasks:
+        section_tasks = [t for t in pending_tasks if t.task_type == TaskType.SECTION_SUMMARIZE.value]
+        print(f"✓ Section 整理任务数: {len(section_tasks)} (期望: > 0)")
+        assert len(section_tasks) > 0, "应该有 Section 整理任务在队列中"
     
     print("\n✓ Section 触发策略测试完成！")
 

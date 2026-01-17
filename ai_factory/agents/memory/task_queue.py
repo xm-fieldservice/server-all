@@ -35,6 +35,7 @@ class TaskStatus(str, Enum):
 class TaskType(str, Enum):
     """任务类型枚举"""
     MEMORY0_PROCESS_ENTRY = "memory0_process_entry"  # Memory0 处理 entry
+    SECTION_SUMMARIZE = "section_summarize"           # Section 整理任务
 
 
 @dataclass

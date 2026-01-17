@@ -5,6 +5,7 @@
 功能：
 - 持续从队列中取出任务
 - 调用 Memory0Service.process_entry() 处理任务
+- 调用 SectionService.summarize_section() 处理 Section 整理任务
 - 错误处理和重试机制（指数退避）
 - 死信队列处理
 - 健康检查和监控
@@ -21,9 +22,10 @@ import uuid
 from typing import Optional, Dict, Any
 from datetime import datetime
 
-from .task_queue import TaskQueue, Memory0Task, TaskStatus, get_task_queue
+from .task_queue import TaskQueue, Memory0Task, TaskStatus, get_task_queue, TaskType
 from .memory0_service import Memory0Service
 from .entry_service import EntryService
+from .section_service import SectionService
 
 # 配置日志
 logging.basicConfig(
@@ -70,7 +72,8 @@ class Memory0Worker:
         self,
         memory0_service: Memory0Service,
         task_queue: Optional[TaskQueue] = None,
-        config: Optional[WorkerConfig] = None
+        config: Optional[WorkerConfig] = None,
+        section_service: Optional[SectionService] = None
     ):
         """初始化 Worker
 
@@ -78,8 +81,10 @@ class Memory0Worker:
             memory0_service: Memory0Service 实例
             task_queue: 任务队列实例（默认使用 get_task_queue()）
             config: Worker 配置（默认使用默认配置）
+            section_service: 可选的 SectionService 实例，用于处理 Section 整理任务
         """
         self.memory0_service = memory0_service
+        self.section_service = section_service
         self.task_queue = task_queue or get_task_queue()
         self.config = config or WorkerConfig()
 
@@ -232,8 +237,13 @@ class Memory0Worker:
             task: 要处理的任务
         """
         try:
-            # 调用 Memory0Service 处理 entry
-            result = self.memory0_service.process_entry(task.entry_id)
+            # 根据任务类型选择处理逻辑
+            if task.task_type == TaskType.SECTION_SUMMARIZE.value:
+                # 处理 Section 整理任务
+                self._process_section_task(task)
+            else:
+                # 处理 Memory0 任务（默认）
+                self._process_memory0_task(task)
 
             # 更新统计
             self.stats["tasks_processed"] += 1
@@ -245,11 +255,6 @@ class Memory0Worker:
                 status=TaskStatus.COMPLETED,
                 worker_id=self.worker_id,
                 worker_info=self.worker_info
-            )
-
-            logger.info(
-                f"Worker {self.worker_id} 任务 {task.task_id} 处理成功: "
-                f"relation={result.relation}"
             )
 
         except Exception as e:
@@ -290,6 +295,47 @@ class Memory0Worker:
                     f"Worker {self.worker_id} 任务 {task.task_id} "
                     f"超过最大重试次数，标记为死信"
                 )
+
+    def _process_memory0_task(self, task: Memory0Task):
+        """处理 Memory0 任务
+
+        Args:
+            task: 要处理的任务
+        """
+        # 调用 Memory0Service 处理 entry
+        result = self.memory0_service.process_entry(task.entry_id)
+
+        logger.info(
+            f"Worker {self.worker_id} Memory0 任务 {task.task_id} 处理成功: "
+            f"relation={result.relation}"
+        )
+
+    def _process_section_task(self, task: Memory0Task):
+        """处理 Section 整理任务
+
+        Args:
+            task: 要处理的任务
+        """
+        if not self.section_service:
+            raise RuntimeError("SectionService 未配置，无法处理 Section 整理任务")
+
+        # 从 payload 中获取参数
+        payload = task.payload or {}
+        session_id = payload.get("session_id", task.entry_id)  # 兼容：使用 session_id 或 entry_id
+        agent_id = payload.get("agent_id", "default")
+        trigger_type = payload.get("trigger_type", "auto")
+
+        # 调用 SectionService 进行整理
+        result = self.section_service.summarize_section(
+            session_id=session_id,
+            agent_id=agent_id,
+            trigger_type=trigger_type
+        )
+
+        logger.info(
+            f"Worker {self.worker_id} Section 任务 {task.task_id} 处理成功: "
+            f"section_id={result.section_id}, entry_id={result.entry_id}"
+        )
 
     def _calculate_retry_delay(self, attempt: int) -> float:
         """计算重试延迟（指数退避）
@@ -410,7 +456,8 @@ class Memory0Worker:
 def create_worker(
     entry_service: EntryService,
     task_queue: Optional[TaskQueue] = None,
-    config: Optional[WorkerConfig] = None
+    config: Optional[WorkerConfig] = None,
+    section_service: Optional[SectionService] = None
 ) -> Memory0Worker:
     """创建 Memory0 Worker 实例
 
@@ -418,6 +465,7 @@ def create_worker(
         entry_service: EntryService 实例
         task_queue: 任务队列实例（默认使用 get_task_queue()）
         config: Worker 配置（默认使用默认配置）
+        section_service: 可选的 SectionService 实例，用于处理 Section 整理任务
 
     Returns:
         Memory0Worker: Worker 实例
@@ -426,5 +474,6 @@ def create_worker(
     return Memory0Worker(
         memory0_service=memory0_service,
         task_queue=task_queue,
-        config=config
+        config=config,
+        section_service=section_service
     )

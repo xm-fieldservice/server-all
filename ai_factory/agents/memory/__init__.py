@@ -17,6 +17,8 @@ Based on `Agent记忆系统详细设计与施工文档.md`.
 
 from __future__ import annotations
 
+from typing import Optional, List
+
 from .session_service import SessionService, SessionInfo, MessageInfo
 from .section_service import SectionService, SectionSummary, SectionInfo, SectionTrigger
 # SectionService 的 check_and_trigger_section 方法通过 SectionService 类直接使用
@@ -109,7 +111,9 @@ def create_memory_stack(
     task_queue: Optional[TaskQueue] = None,
     section_trigger_message_count: int = 10,
     section_trigger_time_interval: int = 3600,
+    section_trigger_cooldown: int = 300,
     section_trigger_keywords: Optional[List[str]] = None,
+    enable_async_section_summarize: bool = False,
     enable_llm_judgment: bool = False
 ) -> MemoryService:
     """创建完整的记忆栈。
@@ -122,7 +126,9 @@ def create_memory_stack(
         task_queue: 可选的任务队列实例（默认使用 get_task_queue()）
         section_trigger_message_count: 消息数量触发阈值（默认10条）
         section_trigger_time_interval: 时间间隔触发阈值（秒，默认3600秒=1小时）
+        section_trigger_cooldown: 触发冷却时间窗（秒，默认300秒=5分钟）
         section_trigger_keywords: 语义触发关键词列表（默认包含"先到这里"、"换个话题"、"总结一下"等）
+        enable_async_section_summarize: 是否启用异步 Section 整理（默认 False）
         enable_llm_judgment: 是否启用 LLM-based 关系判定（默认 False，使用规则判定）
 
     Returns:
@@ -139,7 +145,9 @@ def create_memory_stack(
         enable_async_memory0=enable_async_memory0,  # 启用异步 Memory0
         section_trigger_message_count=section_trigger_message_count,
         section_trigger_time_interval=section_trigger_time_interval,
-        section_trigger_keywords=section_trigger_keywords
+        section_trigger_cooldown=section_trigger_cooldown,  # 添加冷却时间窗
+        section_trigger_keywords=section_trigger_keywords,
+        enable_async_section_summarize=enable_async_section_summarize  # 启用异步 Section 整理
     )
     memory0_service = Memory0Service(
         entry_service=entry_service,
@@ -155,3 +163,33 @@ def create_memory_stack(
     )
 
     return memory_service
+
+
+def create_worker_with_section(
+    entry_service: EntryService,
+    section_service: SectionService,
+    task_queue: Optional[TaskQueue] = None,
+    config: Optional[WorkerConfig] = None
+) -> Memory0Worker:
+    """创建支持 Section 整理任务的 Worker 实例
+
+    Args:
+        entry_service: EntryService 实例
+        section_service: SectionService 实例，用于处理 Section 整理任务
+        task_queue: 任务队列实例（默认使用 get_task_queue()）
+        config: Worker 配置（默认使用默认配置）
+
+    Returns:
+        Memory0Worker: Worker 实例
+    """
+    from .memory_worker import create_worker
+    return create_worker(
+        entry_service=entry_service,
+        section_service=section_service,
+        task_queue=task_queue,
+        config=config
+    )
+
+
+# 更新 __all__ 导出
+__all__.append("create_worker_with_section")

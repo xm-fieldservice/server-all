@@ -75,7 +75,9 @@ class SectionService:
         enable_async_memory0: bool = False,
         section_trigger_message_count: int = 10,
         section_trigger_time_interval: int = 3600,
-        section_trigger_keywords: Optional[List[str]] = None
+        section_trigger_cooldown: int = 300,
+        section_trigger_keywords: Optional[List[str]] = None,
+        enable_async_section_summarize: bool = False
     ):
         """初始化 SectionService。
 
@@ -86,7 +88,9 @@ class SectionService:
             enable_async_memory0: 是否启用异步 Memory0 处理
             section_trigger_message_count: 消息数量触发阈值（默认10条）
             section_trigger_time_interval: 时间间隔触发阈值（秒，默认3600秒=1小时）
+            section_trigger_cooldown: 触发冷却时间窗（秒，默认300秒=5分钟）
             section_trigger_keywords: 语义触发关键词列表（默认包含"先到这里"、"换个话题"、"总结一下"等）
+            enable_async_section_summarize: 是否启用异步 Section 整理（默认 False）
         """
         self.entry_service = entry_service
         self.vector_client = vector_client or VectorClient()
@@ -95,6 +99,7 @@ class SectionService:
         self.enable_async_memory0 = enable_async_memory0
         self.section_trigger_message_count = section_trigger_message_count
         self.section_trigger_time_interval = section_trigger_time_interval
+        self.section_trigger_cooldown = section_trigger_cooldown
         self.section_trigger_keywords = section_trigger_keywords or [
             "先到这里",
             "换个话题",
@@ -105,6 +110,7 @@ class SectionService:
             "就这样",
             "好了"
         ]
+        self.enable_async_section_summarize = enable_async_section_summarize
 
     def summarize_section(
         self,
@@ -224,53 +230,66 @@ class SectionService:
         - 消息数量触发：基于"上次整理时间之后新增的消息数"判断
         - 时间间隔触发：基于"距离上次整理的时间"判断
         - 语义触发：每次调用都会检查（因为语义触发是显式用户意图）
+        - 冷却时间窗：触发后会有一段时间的冷却期（默认5分钟），防止重复触发
+        - 异步处理：如果启用异步整理，则入队任务而非同步执行
         """
-        # 1. 获取会话的消息总数和上次整理时间
+        # 1. 检查冷却时间窗
+        last_triggered_at = self._get_last_section_triggered_at(session_id)
+        if last_triggered_at:
+            now = datetime.now(last_triggered_at.tzinfo) if last_triggered_at.tzinfo else datetime.now()
+            time_since_trigger = (now - last_triggered_at).total_seconds()
+            if time_since_trigger < self.section_trigger_cooldown:
+                print(f"[SectionService] Cooldown active: {time_since_trigger}s < {self.section_trigger_cooldown}s, skipping trigger check")
+                return None
+
+        # 2. 获取会话的消息总数和上次整理时间
         message_count = self._get_session_message_count(session_id)
         last_section_time = self._get_last_section_time(session_id)
 
-        # 2. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
+        # 3. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
+        trigger_type = None
         if message_count >= self.section_trigger_message_count:
             if last_section_time:
                 # 获取上次整理时间之后新增的消息数
                 new_message_count = self._get_session_message_count_since(session_id, last_section_time)
                 if new_message_count >= self.section_trigger_message_count:
                     print(f"[SectionService] Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
-                    return self.summarize_section(
-                        session_id=session_id,
-                        agent_id=agent_id,
-                        trigger_type=SectionTrigger.AUTO.value
-                    )
+                    trigger_type = SectionTrigger.AUTO.value
             else:
                 # 首次整理：直接检查消息总数
                 print(f"[SectionService] Message count trigger (first time): {message_count} messages >= {self.section_trigger_message_count}")
-                return self.summarize_section(
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    trigger_type=SectionTrigger.AUTO.value
-                )
+                trigger_type = SectionTrigger.AUTO.value
 
-        # 3. 检查时间间隔触发
-        if last_section_time:
+        # 4. 检查时间间隔触发
+        if not trigger_type and last_section_time:
             # 处理时区问题：确保 datetime.now() 和 last_section_time 有相同的时区信息
             now = datetime.now(last_section_time.tzinfo) if last_section_time.tzinfo else datetime.now()
             time_since_last = (now - last_section_time).total_seconds()
             if time_since_last >= self.section_trigger_time_interval:
                 print(f"[SectionService] Time interval trigger: {time_since_last}s >= {self.section_trigger_time_interval}s")
+                trigger_type = SectionTrigger.TIMEOUT.value
+
+        # 5. 检查语义触发（如果有用户消息）
+        if not trigger_type and user_message and self._check_semantic_trigger(user_message):
+            print(f"[SectionService] Semantic trigger detected in message: {user_message[:50]}...")
+            trigger_type = SectionTrigger.AUTO.value
+
+        # 6. 如果满足触发条件，执行整理
+        if trigger_type:
+            # 更新触发时间（用于冷却时间窗）
+            self._update_last_section_triggered_at(session_id)
+
+            # 如果启用异步整理，则入队任务
+            if self.enable_async_section_summarize:
+                self._enqueue_section_summarize_task(session_id, agent_id, trigger_type)
+                return None  # 异步处理，不返回结果
+            else:
+                # 同步执行整理
                 return self.summarize_section(
                     session_id=session_id,
                     agent_id=agent_id,
-                    trigger_type=SectionTrigger.TIMEOUT.value
+                    trigger_type=trigger_type
                 )
-
-        # 4. 检查语义触发（如果有用户消息）
-        if user_message and self._check_semantic_trigger(user_message):
-            print(f"[SectionService] Semantic trigger detected in message: {user_message[:50]}...")
-            return self.summarize_section(
-                session_id=session_id,
-                agent_id=agent_id,
-                trigger_type=SectionTrigger.AUTO.value
-            )
 
         # 没有触发条件满足
         return None
@@ -746,6 +765,70 @@ class SectionService:
 
                 result = cur.fetchone()
                 return result[0] if result and result[0] else None
+
+    def _get_last_section_triggered_at(self, session_id: str) -> Optional[datetime]:
+        """获取会话上次触发 Section 整理的时间（用于冷却时间窗控制）。
+
+        Args:
+            session_id: 会话ID
+
+        Returns:
+            Optional[datetime]: 上次触发时间，如果没有则返回 None
+        """
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT last_section_triggered_at
+                    FROM chat_sessions
+                    WHERE session_id = %s
+                """, (session_id,))
+
+                result = cur.fetchone()
+                return result[0] if result and result[0] else None
+
+    def _update_last_section_triggered_at(self, session_id: str) -> None:
+        """更新会话的 Section 触发时间（用于冷却时间窗控制）。
+
+        Args:
+            session_id: 会话ID
+        """
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE chat_sessions
+                    SET last_section_triggered_at = CURRENT_TIMESTAMP
+                    WHERE session_id = %s
+                """, (session_id,))
+
+    def _enqueue_section_summarize_task(
+        self,
+        session_id: str,
+        agent_id: str,
+        trigger_type: str
+    ) -> None:
+        """提交 Section 整理任务到队列。
+
+        Args:
+            session_id: 会话ID
+            agent_id: Agent ID
+            trigger_type: 触发类型
+        """
+        try:
+            task = Memory0Task.create(
+                entry_id=session_id,  # 使用 session_id 作为 entry_id（因为 Section 整理任务需要 session_id）
+                task_type=TaskType.SECTION_SUMMARIZE.value,
+                payload={
+                    "session_id": session_id,
+                    "agent_id": agent_id,
+                    "trigger_type": trigger_type
+                },
+                priority=0
+            )
+            self.task_queue.enqueue(task)
+            print(f"[SectionService] Section summarize task enqueued: {task.task_id} for session {session_id}")
+        except Exception as e:
+            # 任务提交失败不影响主流程
+            print(f"[SectionService] Warning: Failed to enqueue Section summarize task for {session_id}: {e}")
 
     def _check_semantic_trigger(self, message: str) -> bool:
         """检查消息是否包含语义触发关键词。
