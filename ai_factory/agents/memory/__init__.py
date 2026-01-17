@@ -7,6 +7,7 @@ Provides a complete memory stack for agents, including:
 - Memory0Service: Long-term memory governance
 - MemoryService: Facade for all memory operations
 - QACacheService: Q&A cache for fast response to repeated questions
+- SectionAgent: Multi-agent semantic segmentation for section boundary detection
 - VectorClient: Vector search abstraction
 - LLMClient: LLM and Embedding service client for remote APIs
 - TaskQueue: Task queue for asynchronous Memory0 processing
@@ -39,6 +40,13 @@ from .llm_client import LLMClient, get_llm_client, LLMConfig, EmbeddingConfig
 from .task_queue import TaskQueue, Memory0Task, TaskStatus, TaskType, get_task_queue
 from .memory_worker import Memory0Worker, WorkerConfig, create_worker
 from .qa_cache_service import QACacheService, QAStatus, AnswerType, QAInfo, QAStats
+from .section_agent import (
+    SectionAgent,
+    SectionDecision,
+    SectionBoundary,
+    SectionProposal,
+    SectionReview
+)
 from .config import (
     Memory0Profile,
     Memory0Config,
@@ -77,6 +85,12 @@ __all__ = [
     "AnswerType",
     "QAInfo",
     "QAStats",
+    # SectionAgent
+    "SectionAgent",
+    "SectionDecision",
+    "SectionBoundary",
+    "SectionProposal",
+    "SectionReview",
     # VectorClient
     "VectorClient",
     # LLMClient
