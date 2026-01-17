@@ -548,12 +548,12 @@ class PostgresTaskQueue(TaskQueue):
                 deleted_count = cursor.rowcount
                 return deleted_count
 
-    def _row_to_task(self, row: Dict[str, Any]) -> Memory0Task:
+    def _row_to_task(self, row) -> Memory0Task:
         """将数据库行转换为 Memory0Task
-
+        
         Args:
-            row: 数据库行
-
+            row: 数据库行（psycopg2 返回的元组）
+        
         Returns:
             Memory0Task: 任务对象
         """
@@ -562,19 +562,35 @@ class PostgresTaskQueue(TaskQueue):
             'created_at', 'started_at', 'completed_at',
             'failed_at', 'dead_at', 'scheduled_at'
         ]
-
-        row_dict = dict(row)
+        
+        # 从 cursor.description 获取列名（需要传入 cursor）
+        # 这里假设 row 是一个元组，列名按顺序排列
+        # 列顺序：task_id, entry_id, task_type, payload, status, attempts, max_attempts,
+        #          created_at, started_at, completed_at, failed_at, dead_at,
+        #          last_error, priority, scheduled_at, worker_id, worker_info
+        column_names = [
+            'task_id', 'entry_id', 'task_type', 'payload', 'status',
+            'attempts', 'max_attempts', 'created_at', 'started_at',
+            'completed_at', 'failed_at', 'dead_at', 'last_error',
+            'priority', 'scheduled_at', 'worker_id', 'worker_info'
+        ]
+        
+        row_dict = {}
+        for i, value in enumerate(row):
+            if i < len(column_names):
+                row_dict[column_names[i]] = value
+        
         for field in datetime_fields:
-            if row_dict.get(field):
+            if row_dict.get(field) and hasattr(row_dict[field], 'isoformat'):
                 row_dict[field] = row_dict[field].isoformat()
-
+        
         # 处理 JSONB 字段
         if row_dict.get('payload') and isinstance(row_dict['payload'], dict):
             row_dict['payload'] = row_dict['payload']
-
+        
         if row_dict.get('worker_info') and isinstance(row_dict['worker_info'], dict):
             row_dict['worker_info'] = row_dict['worker_info']
-
+        
         return Memory0Task(**row_dict)
 
 

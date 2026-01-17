@@ -23,8 +23,22 @@ import threading
 from typing import Optional
 
 # 添加项目根目录到 Python 路径
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+# 测试文件在 ai-factory/ai_factory/agents/memory/test_memory_pipeline.py
+# 需要添加 ai-factory/ 到 sys.path，这样 ai_factory 包才能被找到
+test_dir = os.path.dirname(os.path.abspath(__file__))
+# 向上三级：memory -> agents -> ai_factory -> ai-factory
+project_root = os.path.dirname(os.path.dirname(os.path.dirname(test_dir)))  # ai-factory/ai_factory
+ai_factory_root = os.path.dirname(project_root)  # ai-factory/
+sys.path.insert(0, ai_factory_root)
+
+# 添加 ai_factory/ai_factory/ 到 sys.path
 sys.path.insert(0, project_root)
+
+# 调试：打印 sys.path
+print(f"DEBUG: test_dir = {test_dir}")
+print(f"DEBUG: project_root = {project_root}")
+print(f"DEBUG: ai_factory_root = {ai_factory_root}")
+print(f"DEBUG: sys.path = {sys.path[:5]}")  # 只打印前5个路径
 
 from ai_factory.agents.memory import (
     create_memory_stack,
@@ -495,6 +509,151 @@ def test_section_trigger_enum() -> None:
     print(f"✓ 枚举值与 SQL 定义一致")
 
 
+def test_section_trigger_strategy(
+    session_service: SessionService,
+    section_service: SectionService
+) -> None:
+    """测试 Section 触发策略。
+    
+    验证以下触发策略：
+    1. 消息数量触发：当上次整理时间之后新增的消息数达到阈值时触发
+    2. 时间间隔触发：当距离上次整理的时间达到阈值时触发
+    3. 语义触发：当用户消息包含关键词时触发
+    
+    Args:
+        session_service: SessionService 实例
+        section_service: SectionService 实例（配置了自定义触发参数）
+    """
+    print_separator("测试 12: Section 触发策略")
+    
+    # 创建一个配置了小触发阈值的 SectionService
+    from ai_factory.agents.memory import create_memory_stack, VectorClient
+    from ai_factory.agents.memory.entry_service import EntryService
+    from ai_factory.agents.memory.task_queue import get_task_queue
+    
+    # 创建自定义配置的 SectionService
+    custom_section_service = SectionService(
+        entry_service=EntryService(),
+        vector_client=VectorClient(),
+        task_queue=get_task_queue(),
+        enable_async_memory0=False,
+        section_trigger_message_count=3,  # 设置较小的阈值用于测试
+        section_trigger_time_interval=2,  # 设置较短的时间间隔（秒）
+        section_trigger_keywords=["总结一下", "换个话题", "先到这里"]
+    )
+    
+    # 测试 1: 消息数量触发
+    print("\n--- 测试 1: 消息数量触发 ---")
+    
+    # 创建新会话
+    session_id = session_service.create_session(
+        user_id="test_user_trigger",
+        assistant_id="test_agent_trigger",
+        title="触发策略测试会话"
+    )
+    print(f"✓ 创建会话: {session_id}")
+    
+    # 添加 2 条消息（未达到阈值 3）
+    session_service.append_message(session_id, "user", "消息 1", "question")
+    session_service.append_message(session_id, "assistant", "回复 1", "answer")
+    print("✓ 添加 2 条消息")
+    
+    # 检查是否触发（应该不触发）
+    result = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 检查触发: {result} (期望: None)")
+    assert result is None, "消息数量未达到阈值时不应该触发"
+    
+    # 添加第 3 条消息（达到阈值）
+    session_service.append_message(session_id, "user", "消息 3", "question")
+    print("✓ 添加第 3 条消息")
+    
+    # 检查是否触发（应该触发）
+    result = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 检查触发: {result is not None} (期望: True)")
+    assert result is not None, "消息数量达到阈值时应该触发"
+    print(f"✓ Section 已创建: {result.section_id}, 触发类型: {result.metadata['trigger_type']}")
+    
+    # 测试幂等性：再次检查（不应该再次触发，因为上次整理时间之后新增消息数为 0）
+    result_2 = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 幂等性检查: {result_2 is not None} (期望: False)")
+    assert result_2 is None, "幂等性检查：不应该重复触发"
+    
+    # 测试 2: 语义触发
+    print("\n--- 测试 2: 语义触发 ---")
+    
+    # 添加包含触发关键词的消息
+    session_service.append_message(
+        session_id=session_id,
+        role="user",
+        content="请总结一下刚才的讨论",
+        msg_type="question"
+    )
+    print("✓ 添加包含触发关键词的消息")
+    
+    # 检查是否触发（应该触发）
+    result = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger",
+        user_message="请总结一下刚才的讨论"
+    )
+    print(f"✓ 语义触发: {result is not None} (期望: True)")
+    assert result is not None, "语义触发关键词应该触发"
+    print(f"✓ Section 已创建: {result.section_id}, 触发类型: {result.metadata['trigger_type']}")
+    
+    # 测试 3: 时间间隔触发
+    print("\n--- 测试 3: 时间间隔触发 ---")
+    
+    # 记录上次整理时间
+    last_section_time = custom_section_service._get_last_section_time(session_id)
+    print(f"✓ 上次整理时间: {last_section_time}")
+    
+    # 等待超过时间间隔阈值
+    import time
+    time.sleep(3)
+    print("✓ 等待 3 秒（超过阈值 2 秒）")
+    
+    # 检查是否触发（应该触发）
+    result = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 时间间隔触发: {result is not None} (期望: True)")
+    assert result is not None, "时间间隔达到阈值时应该触发"
+    print(f"✓ Section 已创建: {result.section_id}, 触发类型: {result.metadata['trigger_type']}")
+    
+    # 测试 4: 验证防抖逻辑
+    print("\n--- 测试 4: 验证防抖逻辑 ---")
+    
+    # 添加多条消息但未达到阈值
+    for i in range(2):
+        session_service.append_message(
+            session_id=session_id,
+            role="user",
+            content=f"测试消息 {i+4}",
+            msg_type="question"
+        )
+    print("✓ 添加 2 条消息（未达到阈值 3）")
+    
+    # 检查是否触发（应该不触发）
+    result = custom_section_service.check_and_trigger_section(
+        session_id=session_id,
+        agent_id="test_agent_trigger"
+    )
+    print(f"✓ 防抖检查: {result is not None} (期望: False)")
+    assert result is None, "防抖逻辑：未达到阈值时不应该触发"
+    
+    print("\n✓ Section 触发策略测试完成！")
+
+
 def main() -> None:
     """主函数。"""
     print("\n" + "=" * 60)
@@ -538,6 +697,9 @@ def main() -> None:
 
         # 测试 SectionTrigger 枚举
         test_section_trigger_enum()
+
+        # 测试 Section 触发策略（P3）
+        test_section_trigger_strategy(memory_stack.session_service, memory_stack.section_service)
 
         print("\n" + "=" * 60)
         print("  ✓ 所有测试通过！")

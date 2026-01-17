@@ -230,11 +230,20 @@ class SectionService:
         last_section_time = self._get_last_section_time(session_id)
 
         # 2. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
-        if last_section_time and message_count >= self.section_trigger_message_count:
-            # 获取上次整理时间之后新增的消息数
-            new_message_count = self._get_session_message_count_since(session_id, last_section_time)
-            if new_message_count >= self.section_trigger_message_count:
-                print(f"[SectionService] Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
+        if message_count >= self.section_trigger_message_count:
+            if last_section_time:
+                # 获取上次整理时间之后新增的消息数
+                new_message_count = self._get_session_message_count_since(session_id, last_section_time)
+                if new_message_count >= self.section_trigger_message_count:
+                    print(f"[SectionService] Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
+                    return self.summarize_section(
+                        session_id=session_id,
+                        agent_id=agent_id,
+                        trigger_type=SectionTrigger.AUTO.value
+                    )
+            else:
+                # 首次整理：直接检查消息总数
+                print(f"[SectionService] Message count trigger (first time): {message_count} messages >= {self.section_trigger_message_count}")
                 return self.summarize_section(
                     session_id=session_id,
                     agent_id=agent_id,
@@ -243,7 +252,9 @@ class SectionService:
 
         # 3. 检查时间间隔触发
         if last_section_time:
-            time_since_last = (datetime.now() - last_section_time).total_seconds()
+            # 处理时区问题：确保 datetime.now() 和 last_section_time 有相同的时区信息
+            now = datetime.now(last_section_time.tzinfo) if last_section_time.tzinfo else datetime.now()
+            time_since_last = (now - last_section_time).total_seconds()
             if time_since_last >= self.section_trigger_time_interval:
                 print(f"[SectionService] Time interval trigger: {time_since_last}s >= {self.section_trigger_time_interval}s")
                 return self.summarize_section(
