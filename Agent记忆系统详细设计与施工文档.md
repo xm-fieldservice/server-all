@@ -4106,6 +4106,7 @@ python -m ai_factory.web.app
 | **P2** | 实现 QACacheService | Q&A 缓存服务 | 2-3 天 | ✅ 已完成并联调通过 |
 | **P2** | 配置集中化 | Memory0 配置模块 | 1 天 | ✅ 已完成并联调通过 |
 | **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发；已修复幂等性/防抖问题 | 0.5 天 | ✅ 已完成并联调通过 |
+| **P4** | Memory0 判定策略细化 | LLM-based 关系判定（NEW/UPDATE/OVERRIDE/DUPLICATE） | 2-3 天 | ✅ 已完成并联调通过 |
 
 ### 9.7 总结
 
@@ -4130,14 +4131,29 @@ python -m ai_factory.web.app
   - 已预定义 `MEMORY0_PROFILES`（CONSERVATIVE/AGGRESSIVE/OBSERVANT）
   - 已修复 `quality_score` 解析问题（支持 dict 和 float 两种格式）
   - 已修复 `query_qa()` 返回类型（从 Dict 改为 QAInfo 对象）
-- **P3：统一 Section trigger_type 取值** ✅ 已完成并联调通过
+- **P3：Section 触发策略细化** ✅ 已完成并联调通过
+  - 已实现 `check_and_trigger_section()` 方法，支持三种触发策略
   - 已添加 `SectionTrigger` 枚举（AUTO/MANUAL/TIMEOUT）
   - 已更新 `SectionService` 默认 `trigger_type` 为 `"auto"`
   - 已验证枚举值与 SQL 定义一致
+  - 已修复消息数量触发逻辑（首次场景）
+  - 已修复时区问题（offset-naive vs offset-aware）
+  - 已编写 4 个集成测试用例，验证触发策略
+- **P4：Memory0 判定策略细化（LLM-based 关系判定）** ✅ 已完成并联调通过
+  - 已在 `LLMClient` 中添加 `determine_memory_relation()` 方法
+  - 已在 `Memory0Service` 中集成 LLM-based 判定
+  - 已添加 `enable_llm_judgment` 参数（默认 False，保持向后兼容）
+  - 已实现 `_handle_with_llm_judgment()` 方法，支持 NEW/UPDATE/OVERRIDE/DUPLICATE 判定
+  - 已实现优雅降级：LLM 判定失败时回退到规则判定
+  - 已更新 `create_memory_stack()` 支持 `enable_llm_judgment` 参数
+  - 已运行测试验证 P4 实现（全部通过）
+  - 已提交代码到 Git（commit 77a1ab7）
 - **端到端集成测试** ✅ 已完成并联调通过
   - 已编写 11 个测试用例，覆盖完整流水线
   - 已验证所有服务正常工作（SessionService、SectionService、MemoryService、Memory0Service、QACacheService、ConfigManager）
   - 已验证异步 Memory0 处理（TaskQueue + Worker）
+  - 已验证 Section 触发策略（消息数量、时间间隔、语义触发）
+  - 已验证 LLM-based 关系判定
 - 主要差距在于：
   1. 多 Agent 语义切分（简化实现）
 - 代码架构更符合"以 Agent 为中心"的设计理念，是合理的演进
