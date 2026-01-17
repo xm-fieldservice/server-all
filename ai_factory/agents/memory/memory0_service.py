@@ -56,7 +56,8 @@ class Memory0Service:
         entry_service: EntryService,
         vector_client: Optional[VectorClient] = None,
         config: Optional[Memory0Config] = None,
-        agent_id: str = "default"
+        agent_id: str = "default",
+        enable_llm_judgment: bool = False
     ):
         """初始化 Memory0Service。
 
@@ -65,11 +66,13 @@ class Memory0Service:
             vector_client: 可选的 VectorClient 实例
             config: 可选的 Memory0Config 配置
             agent_id: Agent ID，用于获取特定配置
+            enable_llm_judgment: 是否启用 LLM-based 关系判定（默认 False，使用规则判定）
         """
         self.entry_service = entry_service
         self.vector_client = vector_client or VectorClient()
         self.llm_client = get_llm_client()
         self.agent_id = agent_id
+        self.enable_llm_judgment = enable_llm_judgment
         
         # 获取配置
         config_manager = get_config_manager()
@@ -286,6 +289,11 @@ class Memory0Service:
         existing_content = best_match.get("content", "")
         existing_entry_id = best_match.get("entry_id")
 
+        # 如果启用了 LLM-based 判定，使用 LLM 判定关系
+        if self.enable_llm_judgment:
+            return self._handle_with_llm_judgment(candidate, embedding, existing_entry_id, existing_content)
+
+        # 否则使用规则判定
         # 1. 检查是否有冲突信号
         has_conflict = self._detect_conflict(candidate.content, existing_content)
 
@@ -328,6 +336,11 @@ class Memory0Service:
         existing_content = best_match.get("content", "")
         existing_entry_id = best_match.get("entry_id")
 
+        # 如果启用了 LLM-based 判定，使用 LLM 判定关系
+        if self.enable_llm_judgment:
+            return self._handle_with_llm_judgment(candidate, embedding, existing_entry_id, existing_content)
+
+        # 否则使用规则判定
         # 检查是否有冲突信号
         has_conflict = self._detect_conflict(candidate.content, existing_content)
 
@@ -480,6 +493,69 @@ class Memory0Service:
                         last_seen_at = CURRENT_TIMESTAMP
                     WHERE entry_id = %s
                 """, (entry_id,))
+
+    def _handle_with_llm_judgment(
+        self,
+        candidate: MemoryCandidate,
+        embedding: Optional[List[float]],
+        existing_entry_id: str,
+        existing_content: str
+    ) -> MemoryResult:
+        """使用 LLM 判定关系并处理。
+
+        Args:
+            candidate: 记忆候选
+            embedding: 向量（可选）
+            existing_entry_id: 现有条目ID
+            existing_content: 现有条目内容
+
+        Returns:
+            MemoryResult: 治理结果
+        """
+        try:
+            # 调用 LLM 判定关系
+            judgment = self.llm_client.determine_memory_relation_sync(
+                new_content=candidate.content,
+                old_content=existing_content
+            )
+
+            relation = judgment.get("relation", "new")
+            reason = judgment.get("reason", "")
+            confidence = judgment.get("confidence", 0.5)
+
+            print(f"[Memory0Service] LLM judgment: relation={relation}, reason={reason}, confidence={confidence}")
+
+            # 根据判定结果处理
+            if relation == "new":
+                return self._handle_new(candidate, embedding)
+            elif relation == "duplicate":
+                self._update_entry_usage(existing_entry_id)
+                return MemoryResult(
+                    relation=MemoryRelation.DUPLICATE,
+                    entry_id=existing_entry_id,
+                    overridden_entry_ids=[],
+                    metadata={"duplicate_of": existing_entry_id, "llm_reason": reason, "llm_confidence": confidence}
+                )
+            elif relation == "update":
+                return self._handle_update(candidate, embedding, existing_entry_id)
+            elif relation == "override":
+                return self._handle_override(candidate, embedding, existing_entry_id)
+            else:
+                # 未知关系类型，默认为 NEW
+                print(f"[Memory0Service] Warning: Unknown relation type '{relation}', defaulting to NEW")
+                return self._handle_new(candidate, embedding)
+
+        except Exception as e:
+            # LLM 判定失败，回退到规则判定
+            print(f"[Memory0Service] Warning: LLM judgment failed: {e}, falling back to rule-based judgment")
+            
+            # 检查是否有冲突信号
+            has_conflict = self._detect_conflict(candidate.content, existing_content)
+
+            if has_conflict:
+                return self._handle_override(candidate, embedding, existing_entry_id)
+            else:
+                return self._handle_update(candidate, embedding, existing_entry_id)
 
     def _mark_entry_as_deprecated(self, entry_id: str) -> None:
         """标记条目为deprecated。

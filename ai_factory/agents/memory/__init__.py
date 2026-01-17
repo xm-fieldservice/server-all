@@ -109,7 +109,8 @@ def create_memory_stack(
     task_queue: Optional[TaskQueue] = None,
     section_trigger_message_count: int = 10,
     section_trigger_time_interval: int = 3600,
-    section_trigger_keywords: Optional[List[str]] = None
+    section_trigger_keywords: Optional[List[str]] = None,
+    enable_llm_judgment: bool = False
 ) -> MemoryService:
     """创建完整的记忆栈。
 
@@ -122,6 +123,7 @@ def create_memory_stack(
         section_trigger_message_count: 消息数量触发阈值（默认10条）
         section_trigger_time_interval: 时间间隔触发阈值（秒，默认3600秒=1小时）
         section_trigger_keywords: 语义触发关键词列表（默认包含"先到这里"、"换个话题"、"总结一下"等）
+        enable_llm_judgment: 是否启用 LLM-based 关系判定（默认 False，使用规则判定）
 
     Returns:
         MemoryService: 配置好的 MemoryService 实例
@@ -141,7 +143,8 @@ def create_memory_stack(
     )
     memory0_service = Memory0Service(
         entry_service=entry_service,
-        vector_client=vector_client  # 注入共享的 VectorClient
+        vector_client=vector_client,  # 注入共享的 VectorClient
+        enable_llm_judgment=enable_llm_judgment  # 启用 LLM-based 关系判定
     )
 
     memory_service = MemoryService(

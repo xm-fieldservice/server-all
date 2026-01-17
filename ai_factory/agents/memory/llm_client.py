@@ -477,6 +477,123 @@ class LLMClient:
         loop = self._get_loop()
         return loop.run_until_complete(self.merge_contents(contents, target_section_id))
 
+    async def determine_memory_relation(
+        self,
+        new_content: str,
+        old_content: str
+    ) -> Dict[str, Any]:
+        """
+        使用 LLM 判定两条记忆内容的关系类型
+
+        Args:
+            new_content: 新内容
+            old_content: 旧内容
+
+        Returns:
+            Dict[str, Any]: 包含关系类型和理由的字典，格式为：
+                {
+                    "relation": "new" | "update" | "override" | "duplicate",
+                    "reason": "判定理由",
+                    "confidence": 0.0-1.0
+                }
+        """
+        # 构建提示词
+        prompt_parts = [
+            "你是一个专业的记忆关系判定助手。请分析以下两条记忆内容，判断它们之间的关系。",
+            "",
+            "关系类型定义：",
+            "1. NEW（全新知识点）：两条内容语义完全不同，没有重叠或关联。",
+            "2. UPDATE（旧知识强化/补充）：语义一致，新内容包含更多细节或补充说明，没有冲突或取代信号。",
+            "3. OVERRIDE（规则更新/冲突）：新内容与旧内容明显矛盾或取代，例如：",
+            "   - 数值/阈值改变",
+            "   - 配置参数变更",
+            "   - 明确标记'旧方案废弃，改为 X'",
+            "   - 包含'不再''作废''改为''新版本是'等冲突信号词",
+            "4. DUPLICATE（几乎重复）：文本高度相似，仅有措辞/格式差异，无新增信息。",
+            "",
+            "请以 JSON 格式返回结果，格式如下：",
+            '{',
+            '  "relation": "new" | "update" | "override" | "duplicate",',
+            '  "reason": "判定理由（简短说明）",',
+            '  "confidence": 0.0-1.0',
+            '}',
+            "",
+            "旧内容：",
+            old_content,
+            "",
+            "新内容：",
+            new_content,
+        ]
+
+        # 调用 LLM
+        messages_llm = [{"role": "user", "content": "\n".join(prompt_parts)}]
+        response = await self.chat_completion(
+            messages=messages_llm,
+            temperature=0.1,  # 低温度，确保输出稳定
+            max_tokens=300
+        )
+
+        # 解析 JSON
+        import json
+        try:
+            # 尝试提取 JSON 部分
+            start_idx = response.find('{')
+            end_idx = response.rfind('}') + 1
+            if start_idx >= 0 and end_idx > start_idx:
+                json_str = response[start_idx:end_idx]
+                result = json.loads(json_str)
+                
+                # 验证结果格式
+                relation = result.get("relation", "").lower()
+                if relation not in ["new", "update", "override", "duplicate"]:
+                    # 如果关系类型无效，默认为 new
+                    result["relation"] = "new"
+                    result["reason"] = "LLM 返回了无效的关系类型，默认为 new"
+                
+                # 确保 confidence 在 0-1 之间
+                confidence = result.get("confidence", 0.5)
+                try:
+                    confidence = float(confidence)
+                    confidence = max(0.0, min(1.0, confidence))
+                except (ValueError, TypeError):
+                    confidence = 0.5
+                result["confidence"] = confidence
+                
+                return result
+            else:
+                # 如果无法提取 JSON，返回默认结果
+                return {
+                    "relation": "new",
+                    "reason": "LLM 返回格式错误，默认为 new",
+                    "confidence": 0.5
+                }
+        except json.JSONDecodeError:
+            # JSON 解析失败，返回默认结果
+            return {
+                "relation": "new",
+                "reason": "JSON 解析失败，默认为 new",
+                "confidence": 0.5
+            }
+
+    def determine_memory_relation_sync(
+        self,
+        new_content: str,
+        old_content: str
+    ) -> Dict[str, Any]:
+        """
+        使用 LLM 判定两条记忆内容的关系类型（同步）
+
+        Args:
+            new_content: 新内容
+            old_content: 旧内容
+
+        Returns:
+            Dict[str, Any]: 包含关系类型和理由的字典
+        """
+        import asyncio
+        loop = self._get_loop()
+        return loop.run_until_complete(self.determine_memory_relation(new_content, old_content))
+
     async def close(self):
         """关闭 HTTP 客户端"""
         await self._http_client.aclose()
