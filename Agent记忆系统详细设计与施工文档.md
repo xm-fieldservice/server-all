@@ -4105,7 +4105,7 @@ python -m ai_factory.web.app
 | **P1** | 实现任务队列 | Memory0 任务提交与消费 | 2-3 天 | ✅ 已完成并联调通过 |
 | **P2** | 实现 QACacheService | Q&A 缓存服务 | 2-3 天 | ✅ 已完成并联调通过 |
 | **P2** | 配置集中化 | Memory0 配置模块 | 1 天 | ✅ 已完成并联调通过 |
-| **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发；已修复幂等性/防抖问题 | 0.5 天 | ✅ 已完成并联调通过 |
+| **P3** | Section 触发策略细化 | 实现 check_and_trigger_section() 方法，支持消息数量、时间间隔、语义触发；已修复幂等性/防抖问题；已添加冷却时间窗和异步 Section 整理 | 0.5 天 | ✅ 已完成并联调通过 |
 | **P4** | Memory0 判定策略细化 | LLM-based 关系判定（NEW/UPDATE/OVERRIDE/DUPLICATE） | 2-3 天 | ✅ 已完成并联调通过 |
 
 ### 9.7 总结
@@ -4139,6 +4139,21 @@ python -m ai_factory.web.app
   - 已修复消息数量触发逻辑（首次场景）
   - 已修复时区问题（offset-naive vs offset-aware）
   - 已编写 4 个集成测试用例，验证触发策略
+  - **P3 修复：冷却时间窗和异步 Section 整理** ✅ 已完成
+    - 已添加 `last_section_triggered_at` 字段到 `chat_sessions` 表（003_add_last_section_triggered_at.sql）
+    - 已在 `SectionService` 中添加冷却时间窗检查（`section_trigger_cooldown` 参数，默认 300 秒）
+    - 已添加 `_get_last_section_triggered_at()` 和 `_update_last_section_triggered_at()` 方法
+    - 已添加 `_enqueue_section_summarize_task()` 方法用于异步 Section 整理
+    - 已修改 `check_and_trigger_section()` 方法：
+      - 添加冷却时间窗检查（防止重复触发）
+      - 支持异步 Section 整理（入队而非同步执行）
+    - 已在 `TaskType` 中添加 `SECTION_SUMMARIZE` 任务类型
+    - 已在 `Memory0Worker` 中添加 `_process_section_task()` 方法处理 Section 整理任务
+    - 已更新 `create_worker()` 函数支持 `section_service` 参数
+    - 已更新 `create_memory_stack()` 函数支持 `section_trigger_cooldown` 和 `enable_async_section_summarize` 参数
+    - 已添加 `create_worker_with_section()` 便捷函数
+    - 已更新测试文件，添加冷却时间窗和异步 Section 整理测试用例
+    - 已提交代码到 Git（commit 1cb8a3f）
 - **P4：Memory0 判定策略细化（LLM-based 关系判定）** ✅ 已完成并联调通过
   - 已在 `LLMClient` 中添加 `determine_memory_relation()` 方法
   - 已在 `Memory0Service` 中集成 LLM-based 判定
