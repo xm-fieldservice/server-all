@@ -313,3 +313,101 @@ class SessionService:
                     WHERE session_id = %s
                 """, (session_id,))
                 return cur.rowcount > 0
+
+    def batch_append_messages(
+        self,
+        messages: List[Dict[str, Any]]
+    ) -> List[str]:
+        """批量添加消息到会话。
+
+        使用批量插入提高性能。
+
+        Args:
+            messages: 消息列表，每个消息必须包含 "session_id", "role", "content" 字段
+
+        Returns:
+            List[str]: message_id 列表
+        """
+        if not messages:
+            return []
+
+        message_ids = []
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                for msg_data in messages:
+                    message_id = f"msg_{uuid.uuid4().hex}"
+                    session_id = msg_data.get("session_id")
+                    role = msg_data.get("role")
+                    content = msg_data.get("content")
+                    msg_type = msg_data.get("msg_type")
+                    metadata = msg_data.get("metadata")
+
+                    cur.execute("""
+                        INSERT INTO chat_messages
+                        (message_id, session_id, role, msg_type, content, metadata_json, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        RETURNING message_id
+                    """, (message_id, session_id, role, msg_type, content,
+                           Json(metadata) if metadata else None))
+
+                    row = cur.fetchone()
+                    message_ids.append(row[0] if row else message_id)
+
+        return message_ids
+
+    def batch_get_recent_messages(
+        self,
+        session_ids: List[str],
+        limit: int = 20
+    ) -> Dict[str, List[MessageInfo]]:
+        """批量获取多个会话的最近消息。
+
+        Args:
+            session_ids: 会话ID列表
+            limit: 每个会话返回消息数量限制
+
+        Returns:
+            Dict[str, List[MessageInfo]]: {session_id: 消息列表}
+        """
+        if not session_ids:
+            return {}
+
+        results = {}
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                placeholders = ', '.join(['%s'] * len(session_ids))
+                cur.execute(f"""
+                    SELECT message_id, session_id, role, msg_type, content, metadata_json, created_at
+                    FROM chat_messages
+                    WHERE session_id IN ({placeholders})
+                    ORDER BY session_id, created_at DESC
+                """, session_ids)
+
+                rows = cur.fetchall()
+
+                # 按会话分组
+                for row in rows:
+                    session_id = row[1]
+                    if session_id not in results:
+                        results[session_id] = []
+
+                    results[session_id].append(
+                        MessageInfo(
+                            message_id=row[0],
+                            session_id=row[1],
+                            role=row[2],
+                            msg_type=row[3],
+                            content=row[4],
+                            metadata=row[5] if isinstance(row[5], dict) else None,
+                            created_at=row[6]
+                        )
+                    )
+
+        # 截断到限制数量
+        for session_id in results:
+            results[session_id] = results[session_id][:limit]
+
+        return results
+

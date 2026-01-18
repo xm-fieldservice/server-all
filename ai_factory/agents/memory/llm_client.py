@@ -1,18 +1,114 @@
 """
 LLM 和 Embedding 服务客户端
 支持远端 API 调用：qwen3-embedding (DashScope) 和 deepseek-chat
+
+新增功能：
+- 指数退避重试机制
+- 请求超时控制
+- 请求缓存（减少重复调用）
 """
 
 import os
 import threading
 import asyncio
-from typing import List, Dict, Any, Optional
+import hashlib
+import time
+from typing import List, Dict, Any, Optional, Tuple
 import httpx
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()
+
+
+class RequestCache:
+    """简单的请求缓存类"""
+
+    def __init__(self, max_size: int = 1000, ttl: int = 3600):
+        """初始化请求缓存
+
+        Args:
+            max_size: 最大缓存条目数
+            ttl: 缓存存活时间（秒），默认 1 小时
+        """
+        self._cache: Dict[str, Tuple[Any, float]] = {}
+        self._max_size = max_size
+        self._ttl = ttl
+        self._lock = threading.Lock()
+
+    def _generate_key(self, url: str, data: Dict[str, Any]) -> str:
+        """生成缓存键
+
+        Args:
+            url: 请求 URL
+            data: 请求数据
+
+        Returns:
+            str: 缓存键
+        """
+        # 将 URL 和数据序列化为字符串
+        cache_str = f"{url}:{str(data)}"
+        # 使用 MD5 生成键
+        return hashlib.md5(cache_str.encode('utf-8')).hexdigest()
+
+    def get(self, url: str, data: Dict[str, Any]) -> Optional[Any]:
+        """从缓存中获取数据
+
+        Args:
+            url: 请求 URL
+            data: 请求数据
+
+        Returns:
+            Optional[Any]: 缓存的数据，如果不存在或已过期则返回 None
+        """
+        key = self._generate_key(url, data)
+
+        with self._lock:
+            if key in self._cache:
+                value, timestamp = self._cache[key]
+
+                # 检查是否过期
+                if time.time() - timestamp < self._ttl:
+                    return value
+                else:
+                    # 过期，删除
+                    del self._cache[key]
+
+        return None
+
+    def set(self, url: str, data: Dict[str, Any], value: Any) -> None:
+        """将数据存入缓存
+
+        Args:
+            url: 请求 URL
+            data: 请求数据
+            value: 要缓存的数据
+        """
+        key = self._generate_key(url, data)
+
+        with self._lock:
+            # 如果缓存已满，删除最旧的条目
+            if len(self._cache) >= self._max_size:
+                oldest_key = min(self._cache.keys(), key=lambda k: self._cache[k][1])
+                del self._cache[oldest_key]
+
+            # 存入缓存
+            self._cache[key] = (value, time.time())
+
+    def clear(self) -> None:
+        """清空缓存"""
+        with self._lock:
+            self._cache.clear()
+
+    def size(self) -> int:
+        """获取缓存大小
+
+        Returns:
+            int: 缓存条目数
+        """
+        with self._lock:
+            return len(self._cache)
 
 
 class LLMConfig(BaseModel):
@@ -30,12 +126,52 @@ class EmbeddingConfig(BaseModel):
 
 
 class LLMClient:
-    """LLM 和 Embedding 服务客户端"""
+    """LLM 和 Embedding 服务客户端
 
-    def __init__(self):
+    新增功能：
+    - 指数退避重试机制
+    - 请求超时控制
+    - 请求缓存
+    """
+
+    def __init__(
+        self,
+        max_retries: int = 3,
+        retry_delay: float = 1.0,
+        retry_backoff_factor: float = 2.0,
+        request_timeout: float = 60.0,
+        enable_cache: bool = True,
+        cache_ttl: int = 3600
+    ):
+        """初始化 LLM 客户端
+
+        Args:
+            max_retries: 最大重试次数
+            retry_delay: 初始重试延迟（秒）
+            retry_backoff_factor: 重试退避因子
+            request_timeout: 请求超时（秒）
+            enable_cache: 是否启用缓存
+            cache_ttl: 缓存存活时间（秒）
+        """
         self._llm_config = self._load_llm_config()
         self._embedding_config = self._load_embedding_config()
-        self._http_client = httpx.AsyncClient(timeout=60.0)
+
+        # 重试配置
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+        self._retry_backoff_factor = retry_backoff_factor
+
+        # 请求超时
+        self._request_timeout = request_timeout
+
+        # 初始化 HTTP 客户端（带超时）
+        self._http_client = httpx.AsyncClient(timeout=request_timeout)
+
+        # 初始化缓存
+        self._enable_cache = enable_cache
+        self._embedding_cache = RequestCache(max_size=1000, ttl=cache_ttl) if enable_cache else None
+        self._llm_cache = RequestCache(max_size=1000, ttl=cache_ttl) if enable_cache else None
+
         # 创建全局事件循环，避免 asyncio.run() 多次调用导致事件循环关闭
         self._loop = None
         self._loop_lock = threading.Lock()
@@ -80,11 +216,57 @@ class LLMClient:
             model=model
         )
 
+    async def _retry_with_backoff(
+        self,
+        func,
+        *args,
+        **kwargs
+    ):
+        """带指数退避的重试机制
+
+        Args:
+            func: 要重试的异步函数
+            *args: 函数参数
+            **kwargs: 函数关键字参数
+
+        Returns:
+            函数返回值
+
+        Raises:
+            最后一次尝试的异常
+        """
+        last_exception = None
+
+        for attempt in range(self._max_retries):
+            try:
+                return await func(*args, **kwargs)
+            except Exception as e:
+                last_exception = e
+
+                # 如果是最后一次尝试，直接抛出异常
+                if attempt == self._max_retries - 1:
+                    print(f"[LLMClient] Max retries ({self._max_retries}) reached. Giving up.")
+                    raise e
+
+                # 计算延迟时间（指数退避）
+                delay = self._retry_delay * (self._retry_backoff_factor ** attempt)
+                print(
+                    f"[LLMClient] Attempt {attempt + 1}/{self._max_retries} failed: {e}. "
+                    f"Retrying in {delay:.1f}s..."
+                )
+
+                # 等待后重试
+                await asyncio.sleep(delay)
+
+        # 如果所有尝试都失败，抛出最后一次异常
+        raise last_exception
+
     async def generate_embedding(self, text: str) -> List[float]:
         """
         生成文本的向量嵌入（异步）
 
         使用 DashScope OpenAI 兼容模式 v1 API
+        支持缓存和重试机制
 
         Args:
             text: 输入文本
@@ -113,23 +295,38 @@ class LLMClient:
             }
         }
 
-        # Debug: 打印请求信息
-        print(f"[LLMClient] Embedding request: URL={url}, model={self._embedding_config.model}")
-        response = await self._http_client.post(url, json=data, headers=headers)
-        print(f"[LLMClient] Embedding response: status={response.status_code}")
-        if response.status_code != 200:
-            # 打印错误响应体
-            print(f"[LLMClient] Embedding error response: {response.text}")
-        response.raise_for_status()
-        result = response.json()
-        print(f"[LLMClient] Embedding result keys: {list(result.keys())}")
+        # 检查缓存
+        if self._enable_cache and self._embedding_cache:
+            cached_result = self._embedding_cache.get(url, data)
+            if cached_result is not None:
+                print(f"[LLMClient] Embedding cache hit for text: {text[:50]}...")
+                return cached_result
 
-        # 提取 embedding（DashScope 原生格式：{"output": {"embeddings": [{"text_index": 0, "embedding": [...]}]}}）
-        if "output" in result and "embeddings" in result["output"] and len(result["output"]["embeddings"]) > 0:
-            embedding = result["output"]["embeddings"][0]["embedding"]
-            return embedding
-        else:
-            raise ValueError(f"Unexpected response format: {result}")
+        # 定义请求函数（用于重试）
+        async def _do_request():
+            # Debug: 打印请求信息
+            print(f"[LLMClient] Embedding request: URL={url}, model={self._embedding_config.model}")
+            response = await self._http_client.post(url, json=data, headers=headers)
+            print(f"[LLMClient] Embedding response: status={response.status_code}")
+            if response.status_code != 200:
+                # 打印错误响应体
+                print(f"[LLMClient] Embedding error response: {response.text}")
+            response.raise_for_status()
+            result = response.json()
+            print(f"[LLMClient] Embedding result keys: {list(result.keys())}")
+
+            # 提取 embedding（DashScope 原生格式：{"output": {"embeddings": [{"text_index": 0, "embedding": [...]}]}}）
+            if "output" in result and "embeddings" in result["output"] and len(result["output"]["embeddings"]) > 0:
+                embedding = result["output"]["embeddings"][0]["embedding"]
+                # 存入缓存
+                if self._enable_cache and self._embedding_cache:
+                    self._embedding_cache.set(url, data, embedding)
+                return embedding
+            else:
+                raise ValueError(f"Unexpected response format: {result}")
+
+        # 使用重试机制执行请求
+        return await self._retry_with_backoff(_do_request)
 
     def generate_embedding_sync(self, text: str) -> List[float]:
         """
@@ -155,6 +352,8 @@ class LLMClient:
         """
         调用 LLM 生成回复（异步）
 
+        支持缓存和重试机制
+
         Args:
             messages: 消息列表，格式为 [{"role": "user", "content": "..."}]
             temperature: 温度参数
@@ -177,15 +376,31 @@ class LLMClient:
             **kwargs
         }
 
-        response = await self._http_client.post(url, json=data, headers=headers)
-        response.raise_for_status()
-        result = response.json()
+        # 检查缓存（仅当 temperature 较低时使用缓存，因为高温度会产生随机结果）
+        if self._enable_cache and self._llm_cache and temperature < 0.3:
+            cached_result = self._llm_cache.get(url, data)
+            if cached_result is not None:
+                print(f"[LLMClient] Chat completion cache hit for messages: {messages[-1]['content'][:50]}...")
+                return cached_result
 
-        # 提取回复内容
-        if "choices" in result and len(result["choices"]) > 0:
-            return result["choices"][0]["message"]["content"]
-        else:
-            raise ValueError(f"Unexpected response format: {result}")
+        # 定义请求函数（用于重试）
+        async def _do_request():
+            response = await self._http_client.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            result = response.json()
+
+            # 提取回复内容
+            if "choices" in result and len(result["choices"]) > 0:
+                content = result["choices"][0]["message"]["content"]
+                # 存入缓存（仅当 temperature 较低时）
+                if self._enable_cache and self._llm_cache and temperature < 0.3:
+                    self._llm_cache.set(url, data, content)
+                return content
+            else:
+                raise ValueError(f"Unexpected response format: {result}")
+
+        # 使用重试机制执行请求
+        return await self._retry_with_backoff(_do_request)
 
     def chat_completion_sync(
         self,

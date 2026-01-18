@@ -4201,3 +4201,11 @@ python -m ai_factory.web.app
 - 若未来接入 FastAPI/Notebook 等已有事件循环环境，需改为纯 async 调用
 
 **文档结束**
+
+
+## 10. 短期计划实施记录（2026-01-18）
+
+**更新时间:** 2026-01-18
+**实施内容:** 短期计划高优先级和中优先级任务
+
+详细内容请参见: ai_factory/agents/memory/UPDATE_LOG.md

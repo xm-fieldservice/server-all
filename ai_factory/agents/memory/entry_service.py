@@ -239,6 +239,170 @@ class EntryService:
 
                 return results
 
+    def batch_create_entries(
+        self,
+        entries: List[Dict[str, Any]]
+    ) -> List[str]:
+        """批量创建条目。
+
+        使用批量插入提高性能。
+
+        Args:
+            entries: 条目数据字典列表
+
+        Returns:
+            List[str]: entry_id 列表
+        """
+        if not entries:
+            return []
+
+        # 准备批量数据
+        batch_data = []
+        entry_ids = []
+
+        for data in entries:
+            entry_id = data.get("entry_id") or f"ent_{uuid.uuid4().hex}"
+            entry_ids.append(entry_id)
+
+            payload = dict(data)
+            payload["entry_id"] = entry_id
+
+            # 处理 JSONB 字段
+            for key in ["scene_tags", "extra_meta", "metadata_json"]:
+                if key in payload and isinstance(payload[key], dict):
+                    payload[key] = Json(payload[key])
+
+            batch_data.append(payload)
+
+        # 获取所有可能的字段
+        all_fields = set()
+        for payload in batch_data:
+            all_fields.update(payload.keys())
+
+        columns = sorted(all_fields)
+        placeholders = [f"%({k})s" for k in columns]
+        sql = f"""
+            INSERT INTO entries ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING entry_id
+        """
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                results = []
+                # 批量执行
+                for payload in batch_data:
+                    cur.execute(sql, payload)
+                    row = cur.fetchone()
+                    results.append(row[0] if row else payload["entry_id"])
+
+        return results
+
+    def batch_update_entries(
+        self,
+        updates: List[Dict[str, Any]]
+    ) -> Dict[str, bool]:
+        """批量更新条目。
+
+        Args:
+            updates: 更新数据列表，每个字典必须包含 "entry_id" 字段
+
+        Returns:
+            Dict[str, bool]: {entry_id: 是否更新成功}
+        """
+        if not updates:
+            return {}
+
+        results = {}
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                for update_data in updates:
+                    entry_id = update_data.get("entry_id")
+                    if not entry_id:
+                        continue
+
+                    # 构建更新语句
+                    update_fields = []
+                    params = []
+
+                    for key, value in update_data.items():
+                        if key == "entry_id":
+                            continue
+
+                        if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+                        elif key in ["scene_tags", "extra_meta", "metadata_json"] and isinstance(value, dict):
+                            update_fields.append(f"{key} = %s")
+                            params.append(Json(value))
+                        elif key in ["section_version", "is_latest", "importance", "usage_count"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+                        elif key in ["last_seen_at"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+
+                    if update_fields:
+                        params.append(entry_id)
+                        cur.execute(f"""
+                            UPDATE entries
+                            SET {', '.join(update_fields)}
+                            WHERE entry_id = %s
+                        """, params)
+
+                        results[entry_id] = cur.rowcount > 0
+                    else:
+                        results[entry_id] = False
+
+        return results
+
+    def batch_get_entries(
+        self,
+        entry_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """批量获取条目。
+
+        Args:
+            entry_ids: 条目ID列表
+
+        Returns:
+            Dict[str, Dict[str, Any]]: {entry_id: 条目数据}
+        """
+        if not entry_ids:
+            return {}
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                placeholders = ', '.join(['%s'] * len(entry_ids))
+                cur.execute(f"""
+                    SELECT * FROM entries
+                    WHERE entry_id IN ({placeholders})
+                """, entry_ids)
+
+                rows = cur.fetchall()
+                col_names = [desc[0] for desc in cur.description]
+
+                results = {}
+                for row in rows:
+                    result = dict(zip(col_names, row))
+
+                    # 处理 JSONB 字段
+                    for key in ["scene_tags", "extra_meta", "metadata_json"]:
+                        if key in result and isinstance(result[key], str):
+                            import json
+                            try:
+                                result[key] = json.loads(result[key])
+                            except json.JSONDecodeError:
+                                pass
+
+                    entry_id = result.get("entry_id")
+                    if entry_id:
+                        results[entry_id] = result
+
+        return results
+
+
     def get_section_entries(
         self,
         section_id: str,
@@ -291,3 +455,167 @@ class EntryService:
                     results.append(result)
 
                 return results
+
+    def batch_create_entries(
+        self,
+        entries: List[Dict[str, Any]]
+    ) -> List[str]:
+        """批量创建条目。
+
+        使用批量插入提高性能。
+
+        Args:
+            entries: 条目数据字典列表
+
+        Returns:
+            List[str]: entry_id 列表
+        """
+        if not entries:
+            return []
+
+        # 准备批量数据
+        batch_data = []
+        entry_ids = []
+
+        for data in entries:
+            entry_id = data.get("entry_id") or f"ent_{uuid.uuid4().hex}"
+            entry_ids.append(entry_id)
+
+            payload = dict(data)
+            payload["entry_id"] = entry_id
+
+            # 处理 JSONB 字段
+            for key in ["scene_tags", "extra_meta", "metadata_json"]:
+                if key in payload and isinstance(payload[key], dict):
+                    payload[key] = Json(payload[key])
+
+            batch_data.append(payload)
+
+        # 获取所有可能的字段
+        all_fields = set()
+        for payload in batch_data:
+            all_fields.update(payload.keys())
+
+        columns = sorted(all_fields)
+        placeholders = [f"%({k})s" for k in columns]
+        sql = f"""
+            INSERT INTO entries ({', '.join(columns)})
+            VALUES ({', '.join(placeholders)})
+            RETURNING entry_id
+        """
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                results = []
+                # 批量执行
+                for payload in batch_data:
+                    cur.execute(sql, payload)
+                    row = cur.fetchone()
+                    results.append(row[0] if row else payload["entry_id"])
+
+        return results
+
+    def batch_update_entries(
+        self,
+        updates: List[Dict[str, Any]]
+    ) -> Dict[str, bool]:
+        """批量更新条目。
+
+        Args:
+            updates: 更新数据列表，每个字典必须包含 "entry_id" 字段
+
+        Returns:
+            Dict[str, bool]: {entry_id: 是否更新成功}
+        """
+        if not updates:
+            return {}
+
+        results = {}
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                for update_data in updates:
+                    entry_id = update_data.get("entry_id")
+                    if not entry_id:
+                        continue
+
+                    # 构建更新语句
+                    update_fields = []
+                    params = []
+
+                    for key, value in update_data.items():
+                        if key == "entry_id":
+                            continue
+
+                        if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+                        elif key in ["scene_tags", "extra_meta", "metadata_json"] and isinstance(value, dict):
+                            update_fields.append(f"{key} = %s")
+                            params.append(Json(value))
+                        elif key in ["section_version", "is_latest", "importance", "usage_count"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+                        elif key in ["last_seen_at"]:
+                            update_fields.append(f"{key} = %s")
+                            params.append(value)
+
+                    if update_fields:
+                        params.append(entry_id)
+                        cur.execute(f"""
+                            UPDATE entries
+                            SET {', '.join(update_fields)}
+                            WHERE entry_id = %s
+                        """, params)
+
+                        results[entry_id] = cur.rowcount > 0
+                    else:
+                        results[entry_id] = False
+
+        return results
+
+    def batch_get_entries(
+        self,
+        entry_ids: List[str]
+    ) -> Dict[str, Dict[str, Any]]:
+        """批量获取条目。
+
+        Args:
+            entry_ids: 条目ID列表
+
+        Returns:
+            Dict[str, Dict[str, Any]]: {entry_id: 条目数据}
+        """
+        if not entry_ids:
+            return {}
+
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                placeholders = ', '.join(['%s'] * len(entry_ids))
+                cur.execute(f"""
+                    SELECT * FROM entries
+                    WHERE entry_id IN ({placeholders})
+                """, entry_ids)
+
+                rows = cur.fetchall()
+                col_names = [desc[0] for desc in cur.description]
+
+                results = {}
+                for row in rows:
+                    result = dict(zip(col_names, row))
+
+                    # 处理 JSONB 字段
+                    for key in ["scene_tags", "extra_meta", "metadata_json"]:
+                        if key in result and isinstance(result[key], str):
+                            import json
+                            try:
+                                result[key] = json.loads(result[key])
+                            except json.JSONDecodeError:
+                                pass
+
+                    entry_id = result.get("entry_id")
+                    if entry_id:
+                        results[entry_id] = result
+
+        return results
+
