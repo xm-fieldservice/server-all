@@ -45,59 +45,26 @@ class VectorClient:
                 params = []
 
                 if filters:
-                    # user_id 过滤
-                    if "user_id" in filters:
-                        conditions.append("e.user_id = %s")
-                        params.append(filters["user_id"])
-
-                    # agent_id 过滤
-                    if "agent_id" in filters:
-                        conditions.append("e.agent_id = %s")
-                        params.append(filters["agent_id"])
-
-                    # space_type 过滤
-                    if "space_type" in filters:
-                        conditions.append("e.space_type = %s")
-                        params.append(filters["space_type"])
-
-                    # scene_tags 过滤（JSONB 查询）
-                    if "scene_tags" in filters:
-                        scene_tags = filters["scene_tags"]
-                        if isinstance(scene_tags, dict):
-                            for key, value in scene_tags.items():
-                                if isinstance(value, list) and value:
-                                    conditions.append("e.scene_tags @> %s")
-                                    params.append(json.dumps({key: value}))
-                                elif isinstance(value, str):
-                                    conditions.append("e.scene_tags @> %s")
-                                    params.append(json.dumps({key: [value]}))
-
                     # section_id 过滤
                     if "section_id" in filters:
                         conditions.append("e.section_id = %s")
                         params.append(filters["section_id"])
 
-                    # only_latest 过滤
-                    if "only_latest" in filters and filters["only_latest"]:
-                        conditions.append("e.is_latest = TRUE")
+                    # entry_type 过滤
+                    if "entry_type" in filters:
+                        conditions.append("e.entry_type = %s")
+                        params.append(filters["entry_type"])
 
                 where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
-                # 向量相似度查询
+                # 简化版向量相似度查询（适配记忆系统表结构）
                 sql = f"""
                     SELECT
                         e.entry_id,
-                        e.title,
                         e.content,
+                        e.entry_type,
                         e.section_id,
-                        e.section_version,
-                        e.is_latest,
-                        e.scene_tags,
-                        e.agent_id,
-                        e.space_type,
-                        e.importance,
-                        e.usage_count,
-                        e.last_seen_at,
+                        e.created_at,
                         1 - (emb.embedding <=> %s::vector) AS similarity
                     FROM entries e
                     LEFT JOIN entry_embeddings emb ON e.entry_id = emb.entry_id
@@ -114,18 +81,11 @@ class VectorClient:
                 results = [
                     {
                         "entry_id": row[0],
-                        "title": row[1],
-                        "content": row[2],
+                        "content": row[1],
+                        "entry_type": row[2],
                         "section_id": row[3],
-                        "section_version": row[4],
-                        "is_latest": row[5],
-                        "scene_tags": json.loads(row[6]) if row[6] else {},
-                        "agent_id": row[7],
-                        "space_type": row[8],
-                        "importance": row[9],
-                        "usage_count": row[10],
-                        "last_seen_at": row[11],
-                        "similarity": float(row[12]) if row[12] is not None else None,
+                        "created_at": row[4].isoformat() if row[4] else None,
+                        "similarity": float(row[5]) if row[5] is not None else None,
                     }
                     for row in rows
                 ]

@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agent记忆系统 - 调试与使用</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <style>
+        body {
+            background-color: #f5f5f5;
+        }
+        .message-user {
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+        }
+        .message-assistant {
+            background-color: #f3e5f5;
+            border-left: 4px solid #9c27b0;
+        }
+        .note-badge {
+            background-color: #4caf50;
+        }
+        .qa-badge {
+            background-color: #ff9800;
+        }
+        .topic-boundary {
+            border-top: 2px dashed #ff5722;
+            padding-top: 10px;
+            margin-top: 10px;
+        }
+        .similarity-bar {
+            height: 8px;
+            background-color: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .similarity-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+            transition: width 0.3s ease;
+        }
+        .log-entry {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .metric-card {
+            background: white;
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // API基础URL配置 - 可修改为实际的后端API地址
+        const API_BASE_URL = localStorage.getItem('api_base_url') || 'http://localhost:8001/api/memory';
+
+        // API服务（扩展版）
+        const apiService = {
+            async createSession(data) {
+                const response = await fetch(`${API_BASE_URL}/sessions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '创建会话失败');
+                }
+                return response.json();
+            },
+
+            async appendMessage(sessionId, message) {
+                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(message)
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '发送消息失败');
+                }
+                return response.json();
+            },
+
+            async getSessions() {
+                const response = await fetch(`${API_BASE_URL}/sessions`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '获取会话列表失败');
+                }
+                return response.json();
+            },
+
+            async getMessages(sessionId, limit = 50) {
+                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages?limit=${limit}`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '获取消息列表失败');
+                }
+                return response.json();
+            },
+
+            async searchEntries(query, topK = 5) {
+                const response = await fetch(`${API_BASE_URL}/entries/search?query=${encodeURIComponent(query)}&top_k=${topK}`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '搜索失败');
+                }
+                return response.json();
+            },
+
+            async getSections(sessionId) {
+                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/sections`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '获取段落列表失败');
+                }
+                return response.json();
+            },
+
+            async triggerSection(sessionId, triggerType = 'manual') {
+                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/sections/trigger`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trigger_type: triggerType })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '触发段落整理失败');
+                }
+                return response.json();
+            },
+
+            async getMetrics() {
+                const response = await fetch(`${API_BASE_URL}/metrics`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '获取指标失败');
+                }
+                return response.json();
+            },
+
+            // 新增：语义分类
+            async classifyMessage(content, mode = 'auto') {
+                const response = await fetch(`${API_BASE_URL}/classify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content, mode })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '语义分类失败');
+                }
+                return response.json();
+            },
+
+            // 新增：完整问答
+            async chat(sessionId, userId, assistantId, content, mode = 'auto', searchMode = 'rag') {
+                const response = await fetch(`${API_BASE_URL}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_id: sessionId,
+                        user_id: userId,
+                        assistant_id: assistantId,
+                        content,
+                        mode,
+                        search_mode: searchMode
+                    })
+                });
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || '问答失败');
+                }
+                return response.json();
+            }
+        };
+
+        // 会话管理组件
+        const SessionManager = ({ sessions, selectedSession, onSelectSession, onCreateSession, onDeleteSession }) => {
+            const [isCreating, setIsCreating] = useState(false);
+            const [newSessionData, setNewSessionData] = useState({
+                user_id: 'user_001',
+                assistant_id: 'assistant_001',
+                title: '',
+                department: 'AI研发部'
+            });
+
+            const handleCreate = async () => {
+                if (!newSessionData.title) {
+                    alert('请输入会话标题');
+                    return;
+                }
+                const session = await onCreateSession(newSessionData);
+                setNewSessionData({ ...newSessionData, title: '' });
+                setIsCreating(false);
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow p-3 h-full flex flex-col">
+                    <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                        <h2 className="text-md font-bold">会话列表</h2>
+                        <button
+                            onClick={() => setIsCreating(!isCreating)}
+                            className="bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 text-sm"
+                        >
+                            <i className="fas fa-plus mr-1"></i>新建
+                        </button>
+                    </div>
+
+                    {isCreating && (
+                        <div className="mb-3 p-2 bg-gray-50 rounded flex-shrink-0">
+                            <input
+                                type="text"
+                                placeholder="会话标题"
+                                value={newSessionData.title}
+                                onChange={(e) => setNewSessionData({ ...newSessionData, title: e.target.value })}
+                                className="w-full p-2 border rounded mb-2 text-sm"
+                            />
+                            <select
+                                value={newSessionData.department}
+                                onChange={(e) => setNewSessionData({ ...newSessionData, department: e.target.value })}
+                                className="w-full p-2 border rounded text-sm"
+                            >
+                                <option value="AI研发部">AI研发部</option>
+                                <option value="产品部">产品部</option>
+                                <option value="测试部">测试部</option>
+                            </select>
+                            <div className="flex gap-2">
+                                <button onClick={handleCreate} className="flex-1 bg-green-500 text-white py-1 rounded">创建</button>
+                                <button onClick={() => setIsCreating(false)} className="flex-1 bg-gray-300 py-1 rounded">取消</button>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex-1 overflow-y-auto">
+                        {sessions.map(session => (
+                            <div
+                                key={session.session_id}
+                                onClick={() => onSelectSession(session)}
+                                className={`p-3 rounded mb-2 cursor-pointer transition ${
+                                    selectedSession?.session_id === session.session_id ? 'bg-blue-100 border-l-4 border-blue-500' : 'hover:bg-gray-50'
+                                }`}
+                            >
+                                <div className="font-medium">{session.title || '未命名会话'}</div>
+                                <div className="text-sm text-gray-500">
+                                    {new Date(session.created_at).toLocaleString()}
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                    {session.metadata_json?.department || 'AI研发部'}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // 消息流组件
+        const MessageFlow = ({ messages, onMessageTypeChange, sections }) => {
+            const messageEndRef = useRef(null);
+            const messageContainerRef = useRef(null);
+
+            useEffect(() => {
+                if (messageContainerRef.current) {
+                    messageContainerRef.current.scrollTop = messageContainerRef.current.scrollHeight;
+                }
+            }, [messages]);
+
+            const getSectionBoundary = (messageId) => {
+                if (!sections || sections.length === 0) return null;
+                return sections.find(section =>
+                    section.start_message_id === messageId
+                );
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow p-4 flex flex-col" style={{ height: 'calc(100vh - 280px)' }}>
+                    <h2 className="text-lg font-bold mb-4 flex-shrink-0">消息流</h2>
+                    <div ref={messageContainerRef} className="flex-1 overflow-y-auto space-y-3" style={{ minHeight: 0 }}>
+                        {messages.map((msg, index) => {
+                            const boundary = getSectionBoundary(msg.message_id);
+                            return (
+                                <div key={msg.message_id}>
+                                    {boundary && (
+                                        <div className="topic-boundary mb-3">
+                                            <span className="text-orange-500 text-sm font-bold">
+                                                <i className="fas fa-bookmark mr-1"></i>
+                                                话题边界: {boundary.metadata_json?.title || '新话题'}
+                                            </span>
+                                        </div>
+                                    )}
+                                    <div className={`p-3 rounded ${msg.role === 'user' ? 'message-user' : 'message-assistant'}`}>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <span className="font-bold">
+                                                <i className={`fas ${msg.role === 'user' ? 'fa-user' : 'fa-robot'} mr-1`}></i>
+                                                {msg.role === 'user' ? '用户' : '助手'}
+                                            </span>
+                                            <select
+                                                value={msg.metadata_json?.entry_type || 'note'}
+                                                onChange={(e) => onMessageTypeChange(msg.message_id, e.target.value)}
+                                                className="text-xs px-2 py-1 border rounded"
+                                            >
+                                                <option value="note">笔记</option>
+                                                <option value="qa">问答</option>
+                                            </select>
+                                        </div>
+                                        <div className="text-sm">{msg.content}</div>
+                                        <div className="text-xs text-gray-400 mt-1">
+                                            {new Date(msg.created_at).toLocaleString()}
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        <div ref={messageEndRef} />
+                    </div>
+                </div>
+            );
+        };
+
+        // 检索验证组件
+        const SearchValidation = ({ onSearch }) => {
+            const [query, setQuery] = useState('');
+            const [results, setResults] = useState([]);
+            const [searching, setSearching] = useState(false);
+
+            const handleSearch = async () => {
+                if (!query.trim()) return;
+                setSearching(true);
+                try {
+                    const data = await onSearch(query, 5);
+                    setResults(data.entries || []);
+                } catch (error) {
+                    console.error('搜索失败:', error);
+                    alert('搜索失败');
+                } finally {
+                    setSearching(false);
+                }
+            };
+
+            const handleFeedback = (entryId, isAccurate) => {
+                console.log(`用户反馈: ${entryId} ${isAccurate ? '准确' : '不准确'}`);
+                // 这里可以调用API记录反馈
+            };
+
+            return (
+                <div className="bg-white rounded-lg shadow p-3 h-full flex flex-col">
+                    <h2 className="text-md font-bold mb-3 flex-shrink-0">检索验证</h2>
+                    <div className="flex gap-2 mb-3 flex-shrink-0">
+                        <input
+                            type="text"
+                            placeholder="输入问题或关键词..."
+                            value={query}
+                            onChange={(e) => setQuery(e.target.value)}
+                            onKeyPress={(e) => e.key === 'Enter' && handleSearch()}
+                            className="flex-1 p-2 border rounded text-sm"
+                        />
+                        <button
+                            onClick={handleSearch}
+                            disabled={searching}
+                            className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 disabled:bg-gray-300 text-sm"
+                        >
+                            {searching ? '搜索中...' : '搜索'}
+                        </button>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto space-y-2" style={{ minHeight: 0 }}>
+                        {results.map((result, index) => (
+                            <div key={index} className="p-2 border rounded hover:bg-gray-50">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="font-medium text-xs">
+                                        相似度: {(result.similarity * 100).toFixed(0)}%
+                                    </span>
+                                    <div className="flex gap-1">
+                                        <button
+                                            onClick={() => handleFeedback(result.entry_id, true)}
+                                            className="text-green-500 hover:text-green-700"
+                                        >
+                                            <i className="fas fa-thumbs-up"></i>
+                                        </button>
+                                        <button
+                                            onClick={() => handleFeedback(result.entry_id, false)}
+                                            className="text-red-500 hover:text-red-700"
+                                        >
+                                            <i className="fas fa-thumbs-down"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="similarity-bar mb-2">
+                                    <div
+                                        className="similarity-fill"
+                                        style={{ width: `${result.similarity * 100}%` }}
+                                    />
+                                </div>
+                                <div className="text-xs text-gray-600 mb-2">
+                                    {result.content.substring(0, 150)}
+                                    {result.content.length > 150 ? '...' : ''}
+                                </div>
+                                <div className="flex gap-2">
+                                    {result.entry_type && (
+                                        <span className={`px-2 py-1 rounded text-xs text-white ${
+                                            result.entry_type === 'note' ? 'note-badge' : 'qa-badge'
+                                        }`}>
+                                            {result.entry_type === 'note' ? '笔记' : '问答'}
+                                        </span>
+                                    )}
+                                    <span className="px-2 py-1 bg-gray-200 rounded text-xs">
+                                        {result.source || '长期记忆'}
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // 监控面板组件
+        const MonitorPanel = ({ metrics }) => {
+            return (
+                <div className="bg-white rounded-lg shadow p-4">
+                    <h2 className="text-lg font-bold mb-4">监控指标</h2>
+                    <div className="grid grid-cols-3 gap-4">
+                        <div className="metric-card">
+                            <div className="text-2xl font-bold text-blue-500">{metrics?.cache_hit_rate || 0}%</div>
+                            <div className="text-sm text-gray-500">缓存命中率</div>
+                        </div>
+                        <div className="metric-card">
+                            <div className="text-2xl font-bold text-green-500">{metrics?.search_latency || 0}ms</div>
+                            <div className="text-sm text-gray-500">搜索延迟</div>
+                        </div>
+                        <div className="metric-card">
+                            <div className="text-2xl font-bold text-orange-500">{metrics?.total_entries || 0}</div>
+                            <div className="text-sm text-gray-500">总条目数</div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        // 日志面板组件
+        const LogPanel = ({ logs }) => {
+            const [filter, setFilter] = useState('all');
+
+            const filteredLogs = logs.filter(log => 
+                filter === 'all' || log.level === filter
+            );
+
+            return (
+                <div className="bg-white rounded-lg shadow p-3 h-full flex flex-col">
+                    <div className="flex justify-between items-center mb-3 flex-shrink-0">
+                        <h2 className="text-md font-bold">操作日志</h2>
+                        <select
+                            value={filter}
+                            onChange={(e) => setFilter(e.target.value)}
+                            className="p-1 border rounded text-xs"
+                        >
+                            <option value="all">全部</option>
+                            <option value="INFO">信息</option>
+                            <option value="WARNING">警告</option>
+                            <option value="ERROR">错误</option>
+                        </select>
+                    </div>
+                    <div className="flex-1 overflow-y-auto space-y-2" style={{ minHeight: 0 }}>
+                        {filteredLogs.map((log, index) => (
+                            <div key={index} className={`p-2 rounded text-xs ${
+                                log.level === 'ERROR' ? 'bg-red-50 text-red-700' :
+                                log.level === 'WARNING' ? 'bg-yellow-50 text-yellow-700' :
+                                'bg-gray-50'
+                            }`}>
+                                <div className="flex justify-between">
+                                    <span className="font-bold">{log.level}</span>
+                                    <span className="text-xs text-gray-400">{new Date(log.timestamp).toLocaleTimeString()}</span>
+                                </div>
+                                <div className="log-entry mt-1">{log.message}</div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+
+        // 主应用组件
+        const App = () => {
+            const [sessions, setSessions] = useState([]);
+            const [selectedSession, setSelectedSession] = useState(null);
+            const [messages, setMessages] = useState([]);
+            const [sections, setSections] = useState([]);
+            const [inputText, setInputText] = useState('');
+            const [logs, setLogs] = useState([]);
+            const [metrics, setMetrics] = useState({});
+            const [sending, setSending] = useState(false);
+            const [apiConnected, setApiConnected] = useState(null);
+            const [chatMode, setChatMode] = useState('auto'); // note/qa/auto
+
+            // 初始化调试信息
+            console.log('[DEBUG] App 组件初始化完成');
+            console.log('[DEBUG] API_BASE_URL:', API_BASE_URL);
+
+            // 测试API连接
+            const testApiConnection = async () => {
+                try {
+                    console.log('[DEBUG] 测试API连接...');
+                    const response = await fetch(`${API_BASE_URL}/health`);
+                    if (response.ok) {
+                        setApiConnected(true);
+                        console.log('[DEBUG] API连接成功');
+                    } else {
+                        setApiConnected(false);
+                        console.error('[DEBUG] API连接失败:', response.status);
+                    }
+                } catch (error) {
+                    setApiConnected(false);
+                    console.error('[DEBUG] API连接异常:', error);
+                }
+            };
+
+            useEffect(() => {
+                console.log('[DEBUG] useEffect 执行，初始化数据加载');
+                testApiConnection();
+                loadSessions();
+                loadMetrics();
+                const interval = setInterval(loadMetrics, 5000);
+                return () => clearInterval(interval);
+            }, []);
+
+            const loadSessions = async () => {
+                console.log('[DEBUG] loadSessions 被调用');
+                try {
+                    console.log('[DEBUG] 正在调用 apiService.getSessions()...');
+                    const data = await apiService.getSessions();
+                    console.log('[DEBUG] getSessions 返回:', data);
+                    setSessions(data.sessions || []);
+                    console.log('[DEBUG] 会话列表已更新');
+                } catch (error) {
+                    console.error('[DEBUG] 加载会话失败:', error);
+                    addLog('ERROR', `加载会话失败: ${error.message}`);
+                }
+            };
+
+            const loadMetrics = async () => {
+                try {
+                    const data = await apiService.getMetrics();
+                    setMetrics(data);
+                } catch (error) {
+                    console.error('加载指标失败:', error);
+                }
+            };
+
+            const handleCreateSession = async (sessionData) => {
+                try {
+                    const data = await apiService.createSession(sessionData);
+                    addLog('INFO', `创建会话: ${data.session_id}`);
+                    await loadSessions();
+                    return data;
+                } catch (error) {
+                    addLog('ERROR', `创建会话失败: ${error.message}`);
+                    throw error;
+                }
+            };
+
+            const handleSelectSession = async (session) => {
+                setSelectedSession(session);
+                try {
+                    console.log('[DEBUG] handleSelectSession 开始加载会话数据:', session.session_id);
+                    
+                    // 加载消息列表
+                    const messagesData = await apiService.getMessages(session.session_id);
+                    console.log('[DEBUG] 消息加载完成:', messagesData);
+                    setMessages(messagesData.messages || []);
+                    
+                    // 加载段落列表（非关键功能，失败也不影响主要功能）
+                    try {
+                        const sectionsData = await apiService.getSections(session.session_id);
+                        console.log('[DEBUG] 段落加载完成:', sectionsData);
+                        setSections(sectionsData.sections || []);
+                    } catch (sectionError) {
+                        console.warn('[DEBUG] 段落加载失败（非关键）:', sectionError);
+                        setSections([]);
+                    }
+                    
+                    addLog('INFO', `加载会话: ${session.title}`);
+                } catch (error) {
+                    console.error('[DEBUG] 加载会话失败:', error);
+                    addLog('ERROR', `加载会话失败: ${error.message}`);
+                }
+            };
+
+            const handleSendMessage = async () => {
+                console.log('[DEBUG] handleSendMessage 被调用');
+                console.log('[DEBUG] inputText:', inputText);
+                console.log('[DEBUG] selectedSession:', selectedSession);
+                console.log('[DEBUG] sending:', sending);
+
+                if (!inputText.trim() || !selectedSession || sending) {
+                    console.log('[DEBUG] 发送被阻止:', {
+                        hasInput: !!inputText.trim(),
+                        hasSession: !!selectedSession,
+                        isSending: sending
+                    });
+                    
+                    if (!selectedSession) {
+                        alert('请先创建一个会话！\n\n步骤：\n1. 点击左侧"新建"按钮\n2. 输入会话标题\n3. 点击"创建"\n4. 然后就可以发送消息了');
+                    }
+                    return;
+                }
+
+                setSending(true);
+
+                console.log('[DEBUG] 调用完整问答接口...');
+                console.log('[DEBUG] chatMode:', chatMode);
+
+                try {
+                    // 调用新的chat接口（支持语义分析和问答）
+                    const result = await apiService.chat(
+                        selectedSession.session_id,
+                        'user_001',
+                        'assistant_001',
+                        inputText,
+                        chatMode,
+                        'rag'
+                    );
+
+                    console.log('[DEBUG] chat接口返回:', result);
+
+                    setInputText('');
+
+                    if (result.is_question) {
+                        // 是问题：显示Agent回答
+                        addLog('INFO', `语义分析：问题 | 模式：${result.mode}`);
+                        addLog('INFO', `Agent回答已生成`);
+                        addLog('INFO', `回答内容: ${result.answer.substring(0, 100)}...`);
+                    } else {
+                        // 不是问题：保存为笔记
+                        addLog('INFO', `语义分析：笔记 | 模式：${result.mode}`);
+                        addLog('INFO', `消息已保存为笔记`);
+                    }
+
+                    // 刷新消息列表
+                    await handleSelectSession(selectedSession);
+                } catch (error) {
+                    console.error('[DEBUG] 问答失败:', error);
+                    addLog('ERROR', `问答失败: ${error.message}`);
+                    alert(`问答失败: ${error.message}`);
+                } finally {
+                    setSending(false);
+                }
+            };
+
+            const handleMessageTypeChange = async (messageId, entryType) => {
+                addLog('INFO', `修改消息类型: ${messageId} -> ${entryType}`);
+                // 这里可以调用API更新消息类型
+            };
+
+            const handleSearch = async (query, topK) => {
+                addLog('INFO', `搜索: ${query}`);
+                return await apiService.searchEntries(query, topK);
+            };
+
+            const handleTriggerSection = async () => {
+                if (!selectedSession) return;
+                try {
+                    await apiService.triggerSection(selectedSession.session_id, 'manual');
+                    addLog('INFO', `触发段落整理: ${selectedSession.session_id}`);
+                    await handleSelectSession(selectedSession);
+                } catch (error) {
+                    addLog('ERROR', `触发段落整理失败: ${error.message}`);
+                }
+            };
+
+            const addLog = (level, message) => {
+                setLogs(prev => [{
+                    level,
+                    message,
+                    timestamp: new Date().toISOString()
+                }, ...prev].slice(0, 100));
+            };
+
+            // 辅助函数：根据模式获取提示文本
+            const getPlaceholder = () => {
+                switch (chatMode) {
+                    case 'note':
+                        return '输入笔记内容... (Shift+Enter换行)';
+                    case 'qa':
+                        return '输入问题... (Shift+Enter换行)';
+                    case 'auto':
+                        return '输入内容，AI自动判断是笔记还是问题... (Shift+Enter换行)';
+                    default:
+                        return '输入消息... (Shift+Enter换行)';
+                }
+            };
+
+            // 辅助函数：根据模式获取按钮文本
+            const getButtonText = () => {
+                switch (chatMode) {
+                    case 'note':
+                        return '保存笔记 (Enter)';
+                    case 'qa':
+                        return '提问 (Enter)';
+                    case 'auto':
+                        return '发送 (Enter)';
+                    default:
+                        return '发送 (Enter)';
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-gray-100">
+                    <header className="bg-white shadow p-4">
+                        <div className="max-w-7xl mx-auto">
+                            <div className="flex justify-between items-center mb-2">
+                                <h1 className="text-2xl font-bold text-gray-800">
+                                    <i className="fas fa-brain mr-2"></i>
+                                    Agent记忆系统 - 调试与使用
+                                </h1>
+                                <button
+                                    onClick={() => {
+                                        const newUrl = prompt('请输入后端API地址（例如：http://localhost:8001/api/memory）:', API_BASE_URL);
+                                        if (newUrl && newUrl !== API_BASE_URL) {
+                                            localStorage.setItem('api_base_url', newUrl);
+                                            window.location.reload();
+                                        }
+                                    }}
+                                    className="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-700 text-sm"
+                                >
+                                    <i className="fas fa-cog mr-1"></i>
+                                    配置API
+                                </button>
+                            </div>
+                            <div className="flex items-center space-x-4">
+                                {/* 模式切换器 */}
+                                <div className="flex items-center space-x-2">
+                                    <span className="text-sm text-gray-600 mr-2">当前模式:</span>
+                                    <button
+                                        onClick={() => setChatMode('note')}
+                                        className={`px-3 py-1 rounded text-sm ${
+                                            chatMode === 'note' 
+                                                ? 'bg-blue-500 text-white' 
+                                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                        }`}
+                                    >
+                                        <i className="fas fa-sticky-note mr-1"></i>
+                                        笔记
+                                    </button>
+                                    <button
+                                        onClick={() => setChatMode('qa')}
+                                        className={`px-3 py-1 rounded text-sm ${
+                                            chatMode === 'qa' 
+                                                ? 'bg-green-500 text-white' 
+                                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                        }`}
+                                    >
+                                        <i className="fas fa-question-circle mr-1"></i>
+                                        问答
+                                    </button>
+                                    <button
+                                        onClick={() => setChatMode('auto')}
+                                        className={`px-3 py-1 rounded text-sm ${
+                                            chatMode === 'auto' 
+                                                ? 'bg-purple-500 text-white' 
+                                                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                        }`}
+                                    >
+                                        <i className="fas fa-magic mr-1"></i>
+                                        自动
+                                    </button>
+                                </div>
+                                
+                                {/* API地址显示 */}
+                                <div className="text-sm text-gray-500">
+                                    API地址: <code className="bg-gray-100 px-2 py-1 rounded">{API_BASE_URL}</code>
+                                </div>
+                                {apiConnected === null && (
+                                    <span className="text-sm text-gray-500">
+                                        <i className="fas fa-spinner fa-spin mr-1"></i>
+                                        检测中...
+                                    </span>
+                                )}
+                                {apiConnected === true && (
+                                    <span className="text-sm text-green-600">
+                                        <i className="fas fa-check-circle mr-1"></i>
+                                        API已连接
+                                    </span>
+                                )}
+                                {apiConnected === false && (
+                                    <span className="text-sm text-red-600">
+                                        <i className="fas fa-times-circle mr-1"></i>
+                                        API连接失败
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                        <div className="max-w-7xl mx-auto mt-4">
+                            <MonitorPanel metrics={metrics} />
+                        </div>
+                    </header>
+
+                    <main className="max-w-7xl mx-auto p-4 h-[calc(100vh-32px)] overflow-hidden">
+                        <div className="grid grid-cols-12 gap-4 h-full">
+                            {/* 左侧：会话管理 */}
+                            <div className="col-span-3 h-full flex flex-col">
+                                <SessionManager
+                                    sessions={sessions}
+                                    selectedSession={selectedSession}
+                                    onSelectSession={handleSelectSession}
+                                    onCreateSession={handleCreateSession}
+                                />
+                            </div>
+
+                            {/* 中间：消息流和输入 */}
+                            <div className="col-span-6 flex flex-col gap-2 h-full overflow-hidden">
+                                <MessageFlow
+                                    messages={messages}
+                                    sections={sections}
+                                    onMessageTypeChange={handleMessageTypeChange}
+                                />
+
+                                {/* 输入区域 - 固定在底部 */}
+                                <div className="bg-white rounded-lg shadow p-3 flex-shrink-0">
+                                    {!selectedSession && (
+                                        <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded">
+                                            <h4 className="font-bold text-yellow-800 mb-2 text-sm">
+                                                <i className="fas fa-info-circle mr-2"></i>
+                                                请先创建或选择一个会话
+                                            </h4>
+                                            <ol className="list-decimal list-inside text-xs text-yellow-700 space-y-1">
+                                                <li>点击左侧"新建"按钮</li>
+                                                <li>输入会话标题（如：测试会话）</li>
+                                                <li>点击"创建"按钮</li>
+                                                <li>然后在下方输入消息并发送</li>
+                                            </ol>
+                                        </div>
+                                    )}
+                                    <div className="flex gap-2 mb-2">
+                                        <textarea
+                                            value={inputText}
+                                            onChange={(e) => setInputText(e.target.value)}
+                                            onKeyPress={(e) => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), handleSendMessage())}
+                                            placeholder={selectedSession ? getPlaceholder() : "请先创建或选择一个会话"}
+                                            className="flex-1 p-2 border rounded resize-none text-sm"
+                                            rows={2}
+                                            disabled={!selectedSession || sending}
+                                        />
+                                    </div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={handleSendMessage}
+                                            disabled={!selectedSession || sending}
+                                            className="flex-1 bg-blue-500 text-white py-2 rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:text-gray-300 text-sm"
+                                            title={!selectedSession ? "请先创建或选择一个会话" : ""}
+                                        >
+                                            {sending ? (
+                                                <span><i className="fas fa-spinner fa-spin mr-2"></i>发送中...</span>
+                                            ) : (
+                                                <span><i className="fas fa-paper-plane mr-2"></i>{getButtonText()}</span>
+                                            )}
+                                        </button>
+                                        <button
+                                            onClick={handleTriggerSection}
+                                            disabled={!selectedSession}
+                                            className="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600 disabled:bg-gray-400 disabled:cursor-not-allowed disabled:text-gray-300 text-sm"
+                                            title={!selectedSession ? "请先创建或选择一个会话" : ""}
+                                        >
+                                            <i className="fas fa-cut mr-1"></i>
+                                            触发总结
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 右侧：检索验证和日志 */}
+                            <div className="col-span-3 flex flex-col gap-2 h-full overflow-hidden">
+                                <div className="bg-white rounded-lg shadow p-3 flex-shrink-0">
+                                    <h3 className="text-md font-bold mb-2 text-sm">快速开始</h3>
+                                    <div className="space-y-2">
+                                        <button
+                                            onClick={async () => {
+                                                console.log('[DEBUG] 手动测试API连接...');
+                                                try {
+                                                    const response = await fetch(`${API_BASE_URL}/health`);
+                                                    const data = await response.json();
+                                                    console.log('[DEBUG] API连接成功:', data);
+                                                    alert('API连接成功！');
+                                                } catch (error) {
+                                                    console.error('[DEBUG] API连接失败:', error);
+                                                    alert(`API连接失败: ${error.message}`);
+                                                }
+                                            }}
+                                            className="w-full bg-blue-500 text-white py-2 rounded hover:bg-blue-600 text-sm"
+                                        >
+                                            测试API连接
+                                        </button>
+                                        <button
+                                            onClick={async () => {
+                                                console.log('[DEBUG] 手动测试创建会话...');
+                                                try {
+                                                    const data = await apiService.createSession({
+                                                        user_id: 'user_001',
+                                                        assistant_id: 'assistant_001',
+                                                        title: '测试会话',
+                                                        department: 'AI研发部'
+                                                    });
+                                                    console.log('[DEBUG] 创建会话成功:', data);
+                                                    alert('创建会话成功！\n会话ID: ' + data.session_id + '\n\n请在左侧会话列表中点击这个会话，然后就可以发送消息了。');
+                                                    loadSessions();
+                                                } catch (error) {
+                                                    console.error('[DEBUG] 创建会话失败:', error);
+                                                    alert(`创建会话失败: ${error.message}`);
+                                                }
+                                            }}
+                                            className="w-full bg-green-500 text-white py-2 rounded hover:bg-green-600 text-sm"
+                                        >
+                                            创建测试会话
+                                        </button>
+                                    </div>
+                                    <div className="mt-3 p-2 bg-blue-50 border border-blue-200 rounded">
+                                        <h4 className="font-bold text-blue-800 mb-2 text-xs">使用步骤：</h4>
+                                        <ol className="list-decimal list-inside text-xs text-blue-700 space-y-1">
+                                            <li>点击"创建测试会话"按钮</li>
+                                            <li>在左侧会话列表中点击刚创建的会话</li>
+                                            <li>在下方输入消息</li>
+                                            <li>按Enter或点击"发送"按钮</li>
+                                        </ol>
+                                    </div>
+                                </div>
+                                <div className="flex-1 overflow-hidden">
+                                    <SearchValidation onSearch={handleSearch} />
+                                </div>
+                                <div className="h-48 flex-shrink-0">
+                                    <LogPanel logs={logs} />
+                                </div>
+                            </div>
+                        </div>
+                    </main>
+                </div>
+            );
+        };
+
+        ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+    </script>
+</body>
+</html>
