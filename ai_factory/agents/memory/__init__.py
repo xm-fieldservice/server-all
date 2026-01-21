@@ -57,6 +57,37 @@ from .config import (
     DEFAULT_CONFIG,
     MEMORY0_PROFILES
 )
+from .metrics import (
+    MetricsCollector,
+    TimedContext,
+    get_metrics_collector,
+    record_timing,
+    increment_counter,
+    set_gauge
+)
+from .health_check import (
+    HealthStatus,
+    HealthCheckResult,
+    HealthReport,
+    HealthChecker,
+    get_health_checker,
+    register_health_check,
+    unregister_health_check,
+    run_health_checks,
+    get_last_health_report
+)
+from .logging_config import (
+    setup_logging,
+    get_logger,
+    StructuredFormatter,
+    TextFormatter
+)
+from .monitoring import (
+    MonitoringManager,
+    get_monitoring_manager,
+    initialize_monitoring,
+    monitored
+)
 
 __all__ = [
     # SessionService
@@ -117,6 +148,33 @@ __all__ = [
     "register_default_agents",
     "DEFAULT_CONFIG",
     "MEMORY0_PROFILES",
+    # Metrics
+    "MetricsCollector",
+    "TimedContext",
+    "get_metrics_collector",
+    "record_timing",
+    "increment_counter",
+    "set_gauge",
+    # HealthCheck
+    "HealthStatus",
+    "HealthCheckResult",
+    "HealthReport",
+    "HealthChecker",
+    "get_health_checker",
+    "register_health_check",
+    "unregister_health_check",
+    "run_health_checks",
+    "get_last_health_report",
+    # Logging
+    "setup_logging",
+    "get_logger",
+    "StructuredFormatter",
+    "TextFormatter",
+    # Monitoring
+    "MonitoringManager",
+    "get_monitoring_manager",
+    "initialize_monitoring",
+    "monitored",
 ]
 
 

@@ -99,29 +99,23 @@ class VectorClient:
     def upsert_embedding(
         self,
         entry_id: str,
-        embedding: List[float],
-        project_code: Optional[str] = None
+        embedding: List[float]
     ) -> None:
         """插入或更新向量到 entry_embeddings 表。
 
         Args:
             entry_id: 条目ID
-            embedding: 向量
-            project_code: 项目代码（可选）
+            embedding: 向量（1536维，来自 DashScope text-embedding-v3）
         """
         with connection_scope() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    INSERT INTO entry_embeddings (
-                        entry_id,
-                        embedding,
-                        project_code
-                    )
-                    VALUES (%s, %s, %s)
+                    INSERT INTO entry_embeddings (entry_id, embedding)
+                    VALUES (%s, %s)
                     ON CONFLICT (entry_id) DO UPDATE SET
                         embedding = EXCLUDED.embedding,
-                        project_code = EXCLUDED.project_code
-                """, (entry_id, embedding, project_code))
+                        created_at = CURRENT_TIMESTAMP
+                """, (entry_id, embedding))
 
     def get_embedding(
         self,
@@ -231,16 +225,12 @@ class VectorClient:
 
                     try:
                         cur.execute("""
-                            INSERT INTO entry_embeddings (
-                                entry_id,
-                                embedding,
-                                project_code
-                            )
-                            VALUES (%s, %s, %s)
+                            INSERT INTO entry_embeddings (entry_id, embedding)
+                            VALUES (%s, %s)
                             ON CONFLICT (entry_id) DO UPDATE SET
                                 embedding = EXCLUDED.embedding,
-                                project_code = EXCLUDED.project_code
-                        """, (entry_id, embedding, project_code))
+                                created_at = CURRENT_TIMESTAMP
+                        """, (entry_id, embedding))
 
                         results[entry_id] = True
                     except Exception as e:
