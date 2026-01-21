@@ -2,3 +2,5 @@
 autogen_repo/
 **/pack-*.pack
 **/.git_disabled/
+.env
+env.txt
