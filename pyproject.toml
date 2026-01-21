@@ -1,0 +1,23 @@
+[project]
+name = "ai-factory"
+version = "0.1.0"
+description = "Core AI factory: agents, MCP clients, RAG, DB access for local workspace"
+requires-python = ">=3.11"
+
+dependencies = [
+  # 数据库访问
+  "psycopg2-binary>=2.9",
+  # HTTP 调用（DeepSeek / Ollama 等）
+  "requests>=2.31",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+
+[tool.setuptools]
+
+[tool.setuptools.packages.find]
+include = ["ai_factory*"]
+exclude = ["logs*", "autogen_repo*"]

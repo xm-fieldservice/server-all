@@ -1,0 +1,17 @@
+                                                       Table "public.chat_messages"
+    Column     |           Type           | Collation | Nullable |      Default      | Storage  | Compression | Stats target | Description 
+---------------+--------------------------+-----------+----------+-------------------+----------+-------------+--------------+-------------
+ message_id    | character varying(64)    |           | not null |                   | extended |             |              | 
+ session_id    | character varying(64)    |           | not null |                   | extended |             |              | 
+ role          | character varying(16)    |           | not null |                   | extended |             |              | 
+ msg_type      | character varying(32)    |           |          |                   | extended |             |              | 
+ content       | text                     |           | not null |                   | extended |             |              | 
+ metadata_json | jsonb                    |           |          |                   | extended |             |              | 
+ created_at    | timestamp with time zone |           | not null | CURRENT_TIMESTAMP | plain    |             |              | 
+Indexes:
+    "chat_messages_pkey" PRIMARY KEY, btree (message_id)
+    "idx_chat_messages_created_at" btree (created_at)
+    "idx_chat_messages_role" btree (role)
+    "idx_chat_messages_session_id" btree (session_id)
+Access method: heap
+

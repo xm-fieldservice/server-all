@@ -1,0 +1,25 @@
+                                                              Table "public.chat_sections"
+      Column      |           Type           | Collation | Nullable |           Default           | Storage  | Compression | Stats target | Description 
+------------------+--------------------------+-----------+----------+-----------------------------+----------+-------------+--------------+-------------
+ section_id       | character varying(64)    |           | not null |                             | extended |             |              | 
+ session_id       | character varying(64)    |           | not null |                             | extended |             |              | 
+ title            | character varying(256)   |           |          |                             | extended |             |              | 
+ status           | character varying(32)    |           | not null | 'active'::character varying | extended |             |              | 
+ trigger_type     | character varying(32)    |           | not null |                             | extended |             |              | 
+ message_count    | integer                  |           | not null | 0                           | plain    |             |              | 
+ summary_content  | text                     |           |          |                             | extended |             |              | 
+ summary_entry_id | character varying(64)    |           |          |                             | extended |             |              | 
+ agent_id         | character varying(64)    |           | not null |                             | extended |             |              | 
+ created_at       | timestamp with time zone |           | not null | CURRENT_TIMESTAMP           | plain    |             |              | 
+ updated_at       | timestamp with time zone |           | not null | CURRENT_TIMESTAMP           | plain    |             |              | 
+ completed_at     | timestamp with time zone |           |          |                             | plain    |             |              | 
+Indexes:
+    "chat_sections_pkey" PRIMARY KEY, btree (section_id)
+    "idx_chat_sections_agent_id" btree (agent_id)
+    "idx_chat_sections_completed_at" btree (completed_at)
+    "idx_chat_sections_created_at" btree (created_at)
+    "idx_chat_sections_session_id" btree (session_id)
+    "idx_chat_sections_status" btree (status)
+    "idx_chat_sections_trigger_type" btree (trigger_type)
+Access method: heap
+

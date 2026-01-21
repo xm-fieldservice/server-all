@@ -1,0 +1,8 @@
+.env
+env.txt
+*.bak
+*.bak.*
+__pycache__/
+*.py[cod]
+.windsurf/
+
