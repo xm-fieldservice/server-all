@@ -1,2 +1,4 @@
 .venv/
 autogen_repo/
+**/pack-*.pack
+**/.git_disabled/
