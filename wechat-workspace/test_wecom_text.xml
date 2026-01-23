@@ -1,0 +1,8 @@
+<xml>
+  <ToUserName><![CDATA[wx_appid]]></ToUserName>
+  <FromUserName><![CDATA[u_zhangsan]]></FromUserName>
+  <CreateTime>1736150000</CreateTime>
+  <MsgType><![CDATA[text]]></MsgType>
+  <Content><![CDATA[记：今天和A客户电话沟通需求变更]]></Content>
+  <MsgId>1234567890</MsgId>
+</xml>

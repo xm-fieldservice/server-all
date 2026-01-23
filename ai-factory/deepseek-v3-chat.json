@@ -1,0 +1,43 @@
+{
+  "_autogen_version": "0.6.2",
+  "_config_path": "D:\\AI-Projects\\desktop_app\\config\\agents\\reviewer_qwen_turbo_latest.json",
+  "_memory_backup": {
+    "memory": {
+      "teachability": false
+    }
+  },
+  "memory": [],
+  "memory_write_policy": "none",
+  "model_client": {
+    "config": {
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url": "https://api.deepseek.com/v1",
+      "model": "deepseek-chat",
+      "model_info": {
+        "api_type": "openai",
+        "family": "qwen",
+        "function_calling": true,
+        "json_output": true,
+        "organization": null,
+        "structured_output": false,
+        "timeout": null,
+        "vision": false
+      },
+      "parameters": {
+        "max_tokens": 1024,
+        "temperature": 0.7,
+        "timeout": 60,
+        "top_p": 0.95,
+        "presence_penalty": 0.0,
+        "frequency_penalty": 0.0
+      }
+    },
+    "provider": "autogen_ext.models.openai.OpenAIChatCompletionClient"
+  },
+  "name": "Reviewer",
+  "role": "assistant",
+  "system_message": "You are a critic. Provide constructive feedback.  Respond with 'APPROVE' if your feedback has been addressed.",
+  "tools": [],
+  "type": "agent",
+  "agent_type": "助手型代理（AssistantAgent）"
+}
