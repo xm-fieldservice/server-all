@@ -3,12 +3,19 @@
 Responsible for section cutting, summarization, and producing candidate knowledge
 entries before they are governed by Memory0.
 Follows `Agent记忆系统详细设计与施工文档.md`.
+
+V3升级说明:
+- 添加四层隔离支持（user_id, agent_type, agent_instance_id）
+- 添加RLS上下文管理（set_rls_context, clear_rls_context）
+- 对齐chat_sections表完整结构（status, trigger_type等）
+- 完整错误处理和日志记录
 """
 
 from __future__ import annotations
 
 import uuid
 import json
+import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -20,6 +27,9 @@ from .entry_service import EntryService
 from .vector_client import VectorClient
 from .llm_client import get_llm_client
 from .task_queue import TaskQueue, Memory0Task, TaskType, get_task_queue
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class SectionTrigger(str, Enum):
@@ -49,7 +59,7 @@ class SectionSummary:
 
 @dataclass
 class SectionInfo:
-    """Section信息"""
+    """Section信息（V3升级：包含四层隔离字段）"""
     section_id: str
     session_id: str
     title: Optional[str]
@@ -59,6 +69,9 @@ class SectionInfo:
     summary_content: Optional[str]
     summary_entry_id: Optional[str]
     agent_id: str
+    user_id: Optional[str]  # V3新增：四层隔离 - 第1层
+    agent_type: Optional[str]  # V3新增：四层隔离 - 第2层
+    agent_instance_id: Optional[str]  # V3新增：四层隔离 - 第3层
     created_at: datetime
     updated_at: datetime
     completed_at: Optional[datetime]
@@ -66,6 +79,43 @@ class SectionInfo:
 
 class SectionService:
     """Handle section detection, summarization, and first-stage write to entries."""
+
+    def set_rls_context(
+        self,
+        user_id: str,
+        agent_type: Optional[str] = None
+    ) -> None:
+        """设置RLS上下文（V3新增）
+
+        Args:
+            user_id: 用户ID
+            agent_type: Agent类型（可选）
+        """
+        try:
+            with connection_scope() as conn:
+                with conn.cursor() as cur:
+                    # 设置用户ID（必需）
+                    cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
+
+                    # 设置Agent类型（可选）
+                    if agent_type:
+                        cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+
+                    logger.debug(f"RLS context set: user_id={user_id}, agent_type={agent_type}")
+        except Exception as e:
+            logger.error(f"Failed to set RLS context: {e}")
+            raise
+
+    def clear_rls_context(self) -> None:
+        """清除RLS上下文（V3新增）"""
+        try:
+            with connection_scope() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("RESET ALL")
+                    logger.debug("RLS context cleared")
+        except Exception as e:
+            logger.error(f"Failed to clear RLS context: {e}")
+            raise
 
     def __init__(
         self,
@@ -117,6 +167,9 @@ class SectionService:
         session_id: str,
         section_id: Optional[str] = None,
         agent_id: str = "default",
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        user_id: Optional[str] = None,  # V3新增
         trigger_type: str = "auto",
         manual_section_title: Optional[str] = None
     ) -> SectionSummary:
@@ -126,6 +179,9 @@ class SectionService:
             session_id: 会话ID
             section_id: 可选，手动指定的section_id。如果为None，则生成新的
             agent_id: Agent ID，标识该section属于哪个Agent
+            agent_type: Agent类型（V3新增：四层隔离）
+            agent_instance_id: Agent实例ID（V3新增：四层隔离）
+            user_id: 用户ID（V3新增：四层隔离）
             trigger_type: 触发类型（auto/manual/timeout）
             manual_section_title: 可选，手动指定的section标题
 
@@ -157,7 +213,7 @@ class SectionService:
         # 6. 将旧版本标记为非最新
         self._mark_old_versions_as_not_latest(section_id)
 
-        # 7. 写入entries表（通过EntryService）
+        # 7. 写入entries表（通过EntryService，V3升级：包含四层隔离字段）
         entry_id = self.entry_service.create_entry({
             "entry_id": f"ent_{uuid.uuid4().hex}",
             "title": section_title,
@@ -167,6 +223,9 @@ class SectionService:
             "section_version": section_version,
             "is_latest": True,
             "agent_id": agent_id,
+            "user_id": user_id,  # V3新增
+            "agent_type": agent_type,  # V3新增
+            "agent_instance_id": agent_instance_id,  # V3新增
             "source_session_id": session_id,
             "space_type": "note",  # 默认为笔记类型
         })
@@ -179,7 +238,7 @@ class SectionService:
             # embedding生成失败不影响主流程
             print(f"[SectionService] Warning: Failed to generate embedding for {entry_id}: {e}")
 
-        # 9. 创建或更新section记录
+        # 9. 创建或更新section记录（V3升级：包含四层隔离字段）
         self._create_or_update_section(
             section_id=section_id,
             session_id=session_id,
@@ -189,7 +248,10 @@ class SectionService:
             message_count=len(messages),
             summary_content=summary_content,
             summary_entry_id=entry_id,
-            agent_id=agent_id
+            agent_id=agent_id,
+            user_id=user_id,  # V3新增
+            agent_type=agent_type,  # V3新增
+            agent_instance_id=agent_instance_id  # V3新增
         )
 
         # 10. 提交 Memory0 任务（如果启用异步处理）
@@ -214,6 +276,9 @@ class SectionService:
         self,
         session_id: str,
         agent_id: str = "default",
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        user_id: Optional[str] = None,  # V3新增
         user_message: Optional[str] = None
     ) -> Optional[SectionSummary]:
         """检查是否需要触发 Section 整理，并在满足条件时自动触发。
@@ -221,6 +286,9 @@ class SectionService:
         Args:
             session_id: 会话ID
             agent_id: Agent ID
+            agent_type: Agent类型（V3新增：四层隔离）
+            agent_instance_id: Agent实例ID（V3新增：四层隔离）
+            user_id: 用户ID（V3新增：四层隔离）
             user_message: 可选的用户消息内容，用于语义触发检测
 
         Returns:
@@ -281,13 +349,16 @@ class SectionService:
 
             # 如果启用异步整理，则入队任务
             if self.enable_async_section_summarize:
-                self._enqueue_section_summarize_task(session_id, agent_id, trigger_type)
+                self._enqueue_section_summarize_task(session_id, agent_id, agent_type, agent_instance_id, user_id, trigger_type)
                 return None  # 异步处理，不返回结果
             else:
-                # 同步执行整理
+                # 同步执行整理（V3升级：传递四层隔离字段）
                 return self.summarize_section(
                     session_id=session_id,
                     agent_id=agent_id,
+                    agent_type=agent_type,  # V3新增
+                    agent_instance_id=agent_instance_id,  # V3新增
+                    user_id=user_id,  # V3新增
                     trigger_type=trigger_type
                 )
 
@@ -297,13 +368,19 @@ class SectionService:
     def get_section_history(
         self,
         section_id: str,
-        agent_id: Optional[str] = None
+        agent_id: Optional[str] = None,
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        user_id: Optional[str] = None  # V3新增
     ) -> List[Dict[str, Any]]:
         """获取section的所有版本历史。
 
         Args:
             section_id: Section ID
             agent_id: 可选，过滤特定Agent的条目
+            agent_type: Agent类型（V3新增：四层隔离过滤）
+            agent_instance_id: Agent实例ID（V3新增：四层隔离过滤）
+            user_id: 用户ID（V3新增：四层隔离过滤）
 
         Returns:
             List[Dict[str, Any]]: 版本历史列表
@@ -317,9 +394,22 @@ class SectionService:
                     conditions.append("agent_id = %s")
                     params.append(agent_id)
 
+                # V3新增：四层隔离过滤
+                if user_id:
+                    conditions.append("user_id = %s")
+                    params.append(user_id)
+
+                if agent_type:
+                    conditions.append("agent_type = %s")
+                    params.append(agent_type)
+
+                if agent_instance_id:
+                    conditions.append("agent_instance_id = %s")
+                    params.append(agent_instance_id)
+
                 cur.execute(f"""
                     SELECT entry_id, section_id, section_version, is_latest,
-                           content, scene_tags, agent_id, created_at
+                           content, scene_tags, agent_id, user_id, agent_type, agent_instance_id, created_at
                     FROM entries
                     WHERE {" AND ".join(conditions)}
                     ORDER BY section_version DESC
@@ -335,7 +425,10 @@ class SectionService:
                         "content": row[4],
                         "scene_tags": json.loads(row[5]) if row[5] else {},
                         "agent_id": row[6],
-                        "created_at": row[7]
+                        "user_id": row[7],  # V3新增
+                        "agent_type": row[8],  # V3新增
+                        "agent_instance_id": row[9],  # V3新增
+                        "created_at": row[10]
                     }
                     for row in rows
                 ]
@@ -344,7 +437,10 @@ class SectionService:
         self,
         source_section_ids: List[str],
         target_section_id: str,
-        agent_id: str
+        agent_id: str,
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        user_id: Optional[str] = None  # V3新增
     ) -> SectionSummary:
         """合并多个section为一个。
 
@@ -352,6 +448,9 @@ class SectionService:
             source_section_ids: 源section ID列表
             target_section_id: 目标section ID
             agent_id: Agent ID
+            agent_type: Agent类型（V3新增：四层隔离）
+            agent_instance_id: Agent实例ID（V3新增：四层隔离）
+            user_id: 用户ID（V3新增：四层隔离）
 
         Returns:
             SectionSummary: 合并后的section总结
@@ -378,7 +477,7 @@ class SectionService:
         # 5. 将旧版本标记为非最新
         self._mark_old_versions_as_not_latest(target_section_id)
 
-        # 6. 写入entries表
+        # 6. 写入entries表（V3升级：包含四层隔离字段）
         entry_id = self.entry_service.create_entry({
             "entry_id": f"ent_{uuid.uuid4().hex}",
             "title": f"Merged Section {target_section_id}",
@@ -388,6 +487,9 @@ class SectionService:
             "section_version": section_version,
             "is_latest": True,
             "agent_id": agent_id,
+            "user_id": user_id,  # V3新增
+            "agent_type": agent_type,  # V3新增
+            "agent_instance_id": agent_instance_id,  # V3新增
             "space_type": "note",
         })
 
@@ -429,7 +531,9 @@ class SectionService:
             with conn.cursor() as cur:
                 cur.execute("""
                     SELECT section_id, session_id, title, status, trigger_type, message_count,
-                           summary_content, summary_entry_id, agent_id, created_at, updated_at, completed_at
+                           summary_content, summary_entry_id, agent_id,
+                           user_id, agent_type, agent_instance_id,
+                           created_at, updated_at, completed_at
                     FROM chat_sections
                     WHERE section_id = %s
                 """, (section_id,))
@@ -446,9 +550,12 @@ class SectionService:
                         summary_content=row[6],
                         summary_entry_id=row[7],
                         agent_id=row[8],
-                        created_at=row[9],
-                        updated_at=row[10],
-                        completed_at=row[11]
+                        user_id=row[9],  # V3新增
+                        agent_type=row[10],  # V3新增
+                        agent_instance_id=row[11],  # V3新增
+                        created_at=row[12],
+                        updated_at=row[13],
+                        completed_at=row[14]
                     )
         return None
 
@@ -615,7 +722,10 @@ class SectionService:
         message_count: int,
         summary_content: Optional[str],
         summary_entry_id: Optional[str],
-        agent_id: str
+        agent_id: str,
+        user_id: Optional[str] = None,  # V3新增
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None  # V3新增
     ) -> None:
         """创建或更新section记录。
 
@@ -629,6 +739,9 @@ class SectionService:
             summary_content: 摘要内容
             summary_entry_id: 摘要条目ID
             agent_id: Agent ID
+            user_id: 用户ID（V3新增）
+            agent_type: Agent类型（V3新增）
+            agent_instance_id: Agent实例ID（V3新增）
         """
         with connection_scope() as conn:
             with conn.cursor() as cur:
@@ -641,26 +754,31 @@ class SectionService:
                 exists = cur.fetchone() is not None
 
                 if exists:
-                    # 更新
+                    # 更新（V3升级：包含四层隔离字段）
                     cur.execute("""
                         UPDATE chat_sections
                         SET title = %s, status = %s, message_count = %s,
                             summary_content = %s, summary_entry_id = %s,
+                            user_id = %s, agent_type = %s, agent_instance_id = %s,
                             updated_at = CURRENT_TIMESTAMP,
                             completed_at = CASE WHEN %s = %s THEN CURRENT_TIMESTAMP ELSE completed_at END
                         WHERE section_id = %s
                     """, (title, status, message_count, summary_content,
-                           summary_entry_id, status, "completed", section_id))
+                           summary_entry_id, user_id, agent_type, agent_instance_id,
+                           status, "completed", section_id))
                 else:
-                    # 创建
+                    # 创建（V3升级：包含四层隔离字段）
                     cur.execute("""
                         INSERT INTO chat_sections
                         (section_id, session_id, title, status, trigger_type, message_count,
-                         summary_content, summary_entry_id, agent_id, created_at, updated_at, completed_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
+                         summary_content, summary_entry_id, agent_id, user_id, agent_type, agent_instance_id,
+                         created_at, updated_at, completed_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP,
                                 CASE WHEN %s = %s THEN CURRENT_TIMESTAMP ELSE NULL END)
                     """, (section_id, session_id, title, status, trigger_type,
                            message_count, summary_content, summary_entry_id, agent_id,
+                           user_id, agent_type, agent_instance_id,
                            status, "completed"))
 
     def _merge_content_with_llm(
@@ -804,13 +922,19 @@ class SectionService:
         self,
         session_id: str,
         agent_id: str,
-        trigger_type: str
+        agent_type: Optional[str] = None,  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        user_id: Optional[str] = None,  # V3新增
+        trigger_type: str = "auto"
     ) -> None:
         """提交 Section 整理任务到队列。
 
         Args:
             session_id: 会话ID
             agent_id: Agent ID
+            agent_type: Agent类型（V3新增）
+            agent_instance_id: Agent实例ID（V3新增）
+            user_id: 用户ID（V3新增）
             trigger_type: 触发类型
         """
         try:
@@ -820,15 +944,18 @@ class SectionService:
                 payload={
                     "session_id": session_id,
                     "agent_id": agent_id,
+                    "agent_type": agent_type,  # V3新增
+                    "agent_instance_id": agent_instance_id,  # V3新增
+                    "user_id": user_id,  # V3新增
                     "trigger_type": trigger_type
                 },
                 priority=0
             )
             self.task_queue.enqueue(task)
-            print(f"[SectionService] Section summarize task enqueued: {task.task_id} for session {session_id}")
+            logger.info(f"Section summarize task enqueued: {task.task_id} for session {session_id}")
         except Exception as e:
             # 任务提交失败不影响主流程
-            print(f"[SectionService] Warning: Failed to enqueue Section summarize task for {session_id}: {e}")
+            logger.warning(f"Failed to enqueue Section summarize task for {session_id}: {e}")
 
     def _check_semantic_trigger(self, message: str) -> bool:
         """检查消息是否包含语义触发关键词。
