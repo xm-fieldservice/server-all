@@ -30,6 +30,8 @@ WECOM_APP_SECRET = os.getenv("WECOM_APP_SECRET", "")
 
 from wecom_gateway.registry import get_handler
 from wecom_gateway import handlers  # 触发注册，确保所有处理器自动注册
+from wecom_gateway import group_chat  # 工人-客服群聊系统
+from wecom_gateway import wecom_org  # 企业微信组织架构
 
 
 class DebugWecomNote(BaseModel):
@@ -613,3 +615,241 @@ async def debug_test_note(userid: str = "test_user", content: str = "测试笔�
         "note_payload": ingest_payload,
         "ingest_result": result,
     }
+
+
+# ============================================
+# 工人-客服群聊系统 API
+# ============================================
+
+class RegisterUserRequest(BaseModel):
+    """注册用户请求"""
+    user_id: str = Field(..., description="用户ID")
+    name: str = Field(..., description="用户姓名")
+    role: group_chat.UserRole = Field(..., description="用户角色：worker/customer_service")
+
+
+class SendGroupMessageRequest(BaseModel):
+    """发送群消息请求"""
+    from_user_id: str = Field(..., description="发送者ID")
+    content: str = Field(..., description="消息内容")
+    to_user_id: Optional[str] = Field(None, description="接收者ID（客服回复工人时使用）")
+
+
+@app.post("/group/register_user")
+async def register_user(req: RegisterUserRequest) -> Dict[str, Any]:
+    """注册用户（工人或客服）"""
+    try:
+        user_info = group_chat.register_user(
+            user_id=req.user_id,
+            name=req.name,
+            role=req.role
+        )
+        return {
+            "success": True,
+            "user": user_info
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/group/send_message")
+async def send_group_message(req: SendGroupMessageRequest) -> Dict[str, Any]:
+    """发送群消息"""
+    try:
+        result = group_chat.send_group_message(
+            from_user_id=req.from_user_id,
+            content=req.content,
+            to_user_id=req.to_user_id
+        )
+        return {
+            "success": True,
+            **result
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/group/messages/{user_id}")
+async def get_user_messages(
+    user_id: str,
+    conversation_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """获取用户可见的消息
+    
+    - 工人：只能看到自己和客服的对话
+    - 客服：可以看到所有消息，或指定conversation_id查看特定工人的对话
+    """
+    user = group_chat.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"用户 {user_id} 不存在")
+    
+    messages = group_chat.get_messages_for_user(user_id, conversation_id)
+    
+    return {
+        "user_id": user_id,
+        "role": user["role"],
+        "conversation_id": conversation_id,
+        "messages": messages,
+        "total": len(messages)
+    }
+
+
+@app.get("/group/conversations")
+async def get_cs_conversations() -> Dict[str, Any]:
+    """获取客服的对话列表"""
+    conversations = group_chat.get_conversations_for_cs()
+    return {
+        "conversations": conversations,
+        "total": len(conversations)
+    }
+
+
+@app.post("/group/mark_read/{conversation_id}")
+async def mark_conversation_read(
+    conversation_id: str,
+    user_id: str
+) -> Dict[str, Any]:
+    """标记会话为已读"""
+    group_chat.mark_conversation_read(conversation_id, user_id)
+    return {"success": True}
+
+
+@app.get("/group/users")
+async def get_all_users() -> Dict[str, Any]:
+    """获取所有用户（按角色分组）"""
+    return group_chat.get_all_users()
+
+
+@app.delete("/group/clear_data")
+async def clear_group_data() -> Dict[str, Any]:
+    """清空所有数据（仅用于测试）"""
+    group_chat.clear_all_data()
+    return {"success": True, "message": "所有数据已清空"}
+
+
+# ============================================
+# 企业微信组织架构 API
+# ============================================
+
+@app.post("/org/sync")
+async def sync_org_data() -> Dict[str, Any]:
+    """同步企业微信组织架构数据"""
+    try:
+        stats = wecom_org.sync_all_org_data()
+        return {
+            "success": True,
+            "stats": stats
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.get("/org/stats")
+async def get_org_stats() -> Dict[str, Any]:
+    """获取组织架构统计信息"""
+    return wecom_org.get_org_stats()
+
+
+@app.get("/org/departments")
+async def list_departments() -> Dict[str, Any]:
+    """获取所有部门列表"""
+    departments = list(wecom_org._DEPARTMENTS.values())
+    # 按parent_id和order排序
+    departments.sort(key=lambda x: (x.get("parent_id", 0), x.get("order", 0)))
+    return {
+        "departments": departments,
+        "total": len(departments)
+    }
+
+
+@app.get("/org/department/{dept_id}")
+async def get_department(dept_id: int) -> Dict[str, Any]:
+    """获取部门详情"""
+    dept = wecom_org.get_department(dept_id)
+    if not dept:
+        raise HTTPException(status_code=404, detail=f"部门 {dept_id} 不存在")
+    
+    # 获取部门路径
+    path = wecom_org.get_department_path(dept_id)
+    # 获取子部门
+    children = wecom_org.get_child_departments(dept_id)
+    # 获取部门成员
+    users = wecom_org.get_department_users(dept_id, include_children=False)
+    
+    return {
+        "department": dept,
+        "path": path,
+        "children": children,
+        "users": users,
+        "users_count": len(users)
+    }
+
+
+@app.get("/org/department/{dept_id}/tree")
+async def get_department_tree(dept_id: int) -> Dict[str, Any]:
+    """获取部门树（包括所有子部门）"""
+    dept = wecom_org.get_department(dept_id)
+    if not dept:
+        raise HTTPException(status_code=404, detail=f"部门 {dept_id} 不存在")
+    
+    def build_tree(dept_id: int) -> Dict[str, Any]:
+        dept = wecom_org.get_department(dept_id)
+        if not dept:
+            return {}
+        
+        children = wecom_org.get_child_departments(dept_id)
+        users = wecom_org.get_department_users(dept_id, include_children=False)
+        
+        return {
+            **dept,
+            "users_count": len(users),
+            "children": [build_tree(child["id"]) for child in children]
+        }
+    
+    return build_tree(dept_id)
+
+
+@app.get("/org/user/{userid}")
+async def get_user_info(userid: str) -> Dict[str, Any]:
+    """获取用户详情"""
+    try:
+        user = wecom_org.get_user_detail(userid)
+        if not user:
+            raise HTTPException(status_code=404, detail=f"用户 {userid} 不存在")
+        
+        # 获取用户所属部门
+        departments = wecom_org.get_user_departments(userid)
+        
+        return {
+            "user": user,
+            "departments": departments
+        }
+    except wecom_org.WeComAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.get("/org/department/{dept_id}/users")
+async def get_department_users(
+    dept_id: int,
+    include_children: bool = False
+) -> Dict[str, Any]:
+    """获取部门成员列表"""
+    dept = wecom_org.get_department(dept_id)
+    if not dept:
+        raise HTTPException(status_code=404, detail=f"部门 {dept_id} 不存在")
+    
+    users = wecom_org.get_department_users(dept_id, include_children)
+    
+    return {
+        "department": dept,
+        "include_children": include_children,
+        "users": users,
+        "total": len(users)
+    }
+
+
+@app.delete("/org/clear_cache")
+async def clear_org_cache() -> Dict[str, Any]:
+    """清空组织架构缓存（仅用于测试）"""
+    wecom_org.clear_cache()
+    return {"success": True, "message": "缓存已清空"}
