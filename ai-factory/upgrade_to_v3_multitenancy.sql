@@ -67,6 +67,63 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_agent_user
 RAISE NOTICE '[chat_sessions] 索引创建完成';
 
 -- ============================================================
+-- 1.5 升级 chat_messages 表（V3新增：写入四层隔离字段便于审计/过滤）
+-- ============================================================
+DO $$
+BEGIN
+    -- 添加 user_id 字段
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'user_id'
+    ) THEN
+        ALTER TABLE chat_messages ADD COLUMN user_id VARCHAR(64);
+        RAISE NOTICE '[chat_messages] 添加 user_id 字段';
+    ELSE
+        RAISE NOTICE '[chat_messages] user_id 字段已存在，跳过';
+    END IF;
+
+    -- 添加 agent_type 字段
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'agent_type'
+    ) THEN
+        ALTER TABLE chat_messages ADD COLUMN agent_type VARCHAR(64);
+        RAISE NOTICE '[chat_messages] 添加 agent_type 字段';
+    ELSE
+        RAISE NOTICE '[chat_messages] agent_type 字段已存在，跳过';
+    END IF;
+
+    -- 添加 agent_instance_id 字段
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'chat_messages' AND column_name = 'agent_instance_id'
+    ) THEN
+        ALTER TABLE chat_messages ADD COLUMN agent_instance_id VARCHAR(64);
+        RAISE NOTICE '[chat_messages] 添加 agent_instance_id 字段';
+    ELSE
+        RAISE NOTICE '[chat_messages] agent_instance_id 字段已存在，跳过';
+    END IF;
+
+    -- 迁移数据：从关联的 chat_sessions 表填充 user_id/agent_type/agent_instance_id
+    UPDATE chat_messages m
+    SET
+        user_id = s.user_id,
+        agent_type = COALESCE(s.agent_type, s.assistant_id),
+        agent_instance_id = s.agent_instance_id
+    FROM chat_sessions s
+    WHERE m.session_id = s.session_id
+      AND (m.user_id IS NULL OR m.agent_type IS NULL OR m.agent_instance_id IS NULL);
+
+    RAISE NOTICE '[chat_messages] 数据迁移完成';
+END $$;
+
+-- 创建常用索引
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_agent_created
+    ON chat_messages (user_id, agent_type, agent_instance_id, created_at DESC);
+
+RAISE NOTICE '[chat_messages] 索引创建完成';
+
+-- ============================================================
 -- 2. 升级 chat_sections 表
 -- ============================================================
 DO $$

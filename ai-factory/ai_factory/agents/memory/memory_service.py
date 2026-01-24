@@ -313,21 +313,27 @@ class MemoryService:
         self,
         session_id: str,
         agent_id: str,
+        user_id: str,  # V3.0: 必需
+        agent_type: Optional[str] = None,  # V3.0
+        agent_instance_id: Optional[str] = None,  # V3.0
         max_tokens: int = DEFAULT_MAX_TOKENS,
         rag_top_k: int = DEFAULT_RAG_TOP_K,
         recent_messages_limit: int = DEFAULT_RECENT_MESSAGES
     ) -> ContextForTurn:
-        """为当前轮次组装上下文。
+        """为当前轮次组装上下文（V3.0: 支持四层隔离）。
 
         组装内容：
         1. 短期记忆：从 SessionService 取最近消息
-        2. 长期记忆：从 EntryService 取相关条目（按 agent_id/scene_tags 过滤）
+        2. 长期记忆：从 EntryService 取相关条目（按四层隔离过滤）
         3. （可选）外部 RAG（世界知识）
         4. 组合成上下文包，按 token 预算截断
 
         Args:
             session_id: 会话ID
             agent_id: Agent ID
+            user_id: 用户ID（V3.0: 必需）
+            agent_type: Agent类型（V3.0: 可选）
+            agent_instance_id: Agent实例ID（V3.0: 可选）
             max_tokens: 最大token数
             rag_top_k: RAG检索返回数量
             recent_messages_limit: 最近消息数量
@@ -338,10 +344,11 @@ class MemoryService:
         # 1. 获取静态提示词（简化版）
         system_prompt = self._get_static_prompt(agent_id)
 
-        # 2. 获取短期记忆（最近消息）
+        # 2. 获取短期记忆（最近消息）- V3.0: 传递user_id进行隔离
         recent_messages = self.session_service.get_recent_messages(
             session_id=session_id,
-            limit=recent_messages_limit
+            limit=recent_messages_limit,
+            user_id=user_id  # V3.0
         )
         # 转换为字典列表
         history_messages = [
@@ -349,12 +356,15 @@ class MemoryService:
                 "message_id": msg.message_id,
                 "role": msg.role,
                 "content": msg.content,
-                "created_at": msg.created_at.isoformat() if msg.created_at else None
+                "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                "user_id": msg.user_id,  # V3.0
+                "agent_type": msg.agent_type,  # V3.0
+                "agent_instance_id": msg.agent_instance_id  # V3.0
             }
             for msg in recent_messages
         ]
 
-        # 3. 获取长期记忆（从entries大库）
+        # 3. 获取长期记忆（从entries大库）- V3.0: 传递四层隔离参数
         rag_snippets = []
         if rag_top_k > 0:
             # 使用智能查询提取器
@@ -363,10 +373,16 @@ class MemoryService:
                 try:
                     # 生成查询embedding
                     query_embedding = self.llm_client.generate_embedding_sync(query_text)
+                    # V3.0: 使用四层隔离参数构建过滤器
+                    filters = {"agent_id": agent_id, "user_id": user_id}
+                    if agent_type:
+                        filters["agent_type"] = agent_type
+                    if agent_instance_id:
+                        filters["agent_instance_id"] = agent_instance_id
                     # 检索相关条目
                     rag_results = self.entry_service.search_similar(
                         query_embedding=query_embedding,
-                        filters={"agent_id": agent_id},
+                        filters=filters,
                         top_k=rag_top_k
                     )
                     # 转换为字典列表
@@ -418,7 +434,10 @@ class MemoryService:
                 "selected_messages_count": len(selected_history_messages),
                 "rag_snippets_count": len(rag_snippets),
                 "selected_rag_count": len(selected_rag_snippets),
-                "generated_at": datetime.now().isoformat()
+                "generated_at": datetime.now().isoformat(),
+                "user_id": user_id,  # V3.0
+                "agent_type": agent_type,  # V3.0
+                "agent_instance_id": agent_instance_id  # V3.0
             }
         )
 
@@ -427,9 +446,11 @@ class MemoryService:
         agent_id: str,
         user_id: str,
         content: str,
+        agent_type: Optional[str] = None,  # V3.0
+        agent_instance_id: Optional[str] = None,  # V3.0
         extra_meta: Optional[Dict[str, Any]] = None
     ) -> str:
-        """显式存储一条信息作为长期记忆。
+        """显式存储一条信息作为长期记忆（V3.0: 支持四层隔离）。
 
         通过 Memory0Service 进行记忆治理，自动判定 NEW/UPDATE/OVERRIDE/DUPLICATE。
 
@@ -437,19 +458,32 @@ class MemoryService:
             agent_id: Agent ID
             user_id: 用户ID
             content: 要记住的内容
+            agent_type: Agent类型（V3.0: 可选）
+            agent_instance_id: Agent实例ID（V3.0: 可选）
             extra_meta: 额外元数据
 
         Returns:
             str: entry_id
         """
+        # V3.0: 在metadata中添加agent_type和agent_instance_id（如果未在extra_meta中指定）
+        if extra_meta is None:
+            extra_meta = {}
+        metadata = extra_meta.copy()
+        if agent_type and "agent_type" not in metadata:
+            metadata["agent_type"] = agent_type
+        if agent_instance_id and "agent_instance_id" not in metadata:
+            metadata["agent_instance_id"] = agent_instance_id
+
         # 构造记忆候选
         candidate = MemoryCandidate(
             content=content,
             user_id=user_id,
             agent_id=agent_id,
+            agent_type=agent_type,  # V3.0
+            agent_instance_id=agent_instance_id,  # V3.0
             scene_tags=extra_meta.get("scene_tags", {}) if extra_meta else {},
             space_type=extra_meta.get("space_type", "note") if extra_meta else "note",
-            metadata=extra_meta or {}
+            metadata=metadata
         )
 
         # 调用 Memory0Service 进行记忆治理
@@ -486,14 +520,20 @@ class MemoryService:
         self,
         session_id: str,
         agent_id: str = "default",
+        user_id: Optional[str] = None,  # V3.0
+        agent_type: Optional[str] = None,  # V3.0
+        agent_instance_id: Optional[str] = None,  # V3.0
         trigger_type: str = "mcp_tool",
         manual_section_title: Optional[str] = None
     ) -> Dict[str, Any]:
-        """整理section并写入entries大库。
+        """整理section并写入entries大库（V3.0: 支持四层隔离）。
 
         Args:
             session_id: 会话ID
             agent_id: Agent ID
+            user_id: 用户ID（V3.0: 可选）
+            agent_type: Agent类型（V3.0: 可选）
+            agent_instance_id: Agent实例ID（V3.0: 可选）
             trigger_type: 触发类型
             manual_section_title: 手动指定的section标题
 
@@ -503,6 +543,9 @@ class MemoryService:
         summary = self.section_service.summarize_section(
             session_id=session_id,
             agent_id=agent_id,
+            user_id=user_id,  # V3.0
+            agent_type=agent_type,  # V3.0
+            agent_instance_id=agent_instance_id,  # V3.0
             trigger_type=trigger_type,
             manual_section_title=manual_section_title
         )
@@ -513,7 +556,10 @@ class MemoryService:
             "section_version": summary.section_version,
             "scene_tags": summary.scene_tags,
             "agent_id": summary.agent_id,
-            "metadata": summary.metadata
+            "metadata": summary.metadata,
+            "user_id": user_id,  # V3.0
+            "agent_type": agent_type,  # V3.0
+            "agent_instance_id": agent_instance_id  # V3.0
         }
 
     def _get_static_prompt(self, agent_id: str) -> str:

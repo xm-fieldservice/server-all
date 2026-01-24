@@ -815,16 +815,351 @@ MEMORY_CACHE_TTL=3600  # session缓存时间
 
 ---
 
-## 7. 风险与挑战
+## 7. 权限管理与安全控制
 
-### 7.1 技术风险
+> **重点关注**：基于企业微信部门架构的数据安全与权限控制
+
+### 7.1 权限控制实现路径
+
+**双层保障机制**：
+
+```
+第一层：数据库层（RLS）
+  └─ PostgreSQL Row Level Security
+  └─ 强制隔离，无法绕过
+  └─ 防止SQL注入等攻击
+
+第二层：应用层（Scene Tags）
+  └─ 显式过滤条件
+  └─ 业务逻辑灵活控制
+  └─ 支持复杂权限规则
+```
+
+### 7.2 部门权限应用场景
+
+#### 场景1: 普通员工搜索笔记
+
+```python
+# 用户：张三（技术部 研发组）
+# 查询：“接口联调”
+
+async def search_notes_for_user(user_id: str, query: str):
+    # 1. 获取用户部门
+    user_info = wecom_org.get_user_detail(user_id)
+    user_depts = user_info.get("department", [])  # [1, 3] = [技术部, 研发组]
+    
+    # 2. 构造部门过滤
+    filters = {
+        "scene_tags.department": user_depts  # 只搜索自己部门的笔记
+    }
+    
+    # 3. 调用搜索
+    results = await memory_client.search_entries(
+        query=query,
+        user_id=f"wecom:{user_id}",
+        agent_type="wecom_note_bot",
+        filters=filters
+    )
+    
+    return results  # 只返回技术部/研发组的笔记
+```
+
+#### 场景2: 部门负责人查看下属笔记
+
+```python
+# 用户：李四（技术总监）
+# 需求：查看技术部所有子部门的工作记录
+
+async def search_notes_for_leader(user_id: str, query: str):
+    # 1. 获取用户部门
+    user_info = wecom_org.get_user_detail(user_id)
+    user_depts = user_info.get("department", [])  # [1] = [技术部]
+    
+    # 2. 检查是否是leader
+    is_leader = wecom_org.is_department_leader(user_id, user_depts[0])
+    
+    if is_leader:
+        # 3. 获取所有子部门
+        all_depts = wecom_org.get_child_departments(user_depts[0], recursive=True)
+        # all_depts = [1, 3, 4] = [技术部, 研发组, 测试组]
+        
+        filters = {
+            "scene_tags.department": all_depts  # 包含所有子部门
+        }
+    else:
+        filters = {
+            "scene_tags.department": user_depts  # 普通员工只能看自己部门
+        }
+    
+    # 4. 调用搜索
+    results = await memory_client.search_entries(
+        query=query,
+        user_id=f"wecom:{user_id}",
+        agent_type="wecom_note_bot",
+        filters=filters
+    )
+    
+    return results
+```
+
+#### 场景3: 跨部门项目成员
+
+```python
+# 用户：王五（项目经理，技术部 + 产品部协作）
+# 需求：查看 X项目的所有相关记录
+
+async def search_project_notes(user_id: str, project_code: str, query: str):
+    # 1. 获取用户信息
+    user_info = wecom_org.get_user_detail(user_id)
+    
+    # 2. 检查用户是否在项目中（从项目管理系统查询）
+    is_project_member = check_project_membership(user_id, project_code)
+    
+    if not is_project_member:
+        raise PermissionError("无权访问该项目")
+    
+    # 3. 构造项目过滤（跨部门）
+    filters = {
+        "scene_tags.project": [project_code]  # 通过项目标签过滤，不限部门
+    }
+    
+    # 4. 调用搜索
+    results = await memory_client.search_entries(
+        query=query,
+        user_id=f"wecom:{user_id}",
+        agent_type="wecom_note_bot",
+        filters=filters
+    )
+    
+    return results  # 返回项目相关的所有部门的记录
+```
+
+### 7.3 RLS策略设计
+
+**PostgreSQL RLS策略示例**：
+
+```sql
+-- 1. 启用RLS
+ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE entries ENABLE ROW LEVEL SECURITY;
+
+-- 2. 创建用户隔离策略
+CREATE POLICY user_isolation_policy ON chat_sessions
+    FOR ALL
+    USING (
+        user_id = current_setting('app.current_user_id', true) OR
+        current_setting('app.current_user_id', true) IS NULL  -- 系统后台任务
+    );
+
+CREATE POLICY user_isolation_policy ON chat_messages
+    FOR ALL
+    USING (
+        session_id IN (
+            SELECT session_id FROM chat_sessions
+            WHERE user_id = current_setting('app.current_user_id', true)
+        ) OR
+        current_setting('app.current_user_id', true) IS NULL
+    );
+
+CREATE POLICY user_isolation_policy ON entries
+    FOR ALL
+    USING (
+        user_id = current_setting('app.current_user_id', true) OR
+        current_setting('app.current_user_id', true) IS NULL
+    );
+
+-- 3. 创建Agent实例隔离策略
+CREATE POLICY agent_instance_isolation_policy ON chat_sessions
+    FOR ALL
+    USING (
+        agent_instance_id = current_setting('app.current_agent_instance_id', true) OR
+        current_setting('app.current_agent_instance_id', true) IS NULL
+    );
+
+-- 4. 使用示例
+BEGIN;
+-- 设置当前上下文
+SET LOCAL app.current_user_id = 'wecom:zhangsan';
+SET LOCAL app.current_agent_type = 'wecom_note_bot';
+SET LOCAL app.current_agent_instance_id = 'dept_001_note';
+
+-- 查询自动只返回张三有权限的数据
+SELECT * FROM entries WHERE scene_tags->>'department' ? '1';
+
+COMMIT;
+```
+
+### 7.4 数据可见性矩阵
+
+| 用户角色 | 可见数据范围 | 实现机制 |
+|----------|-------------|----------|
+| **普通员工** | 本人 + 本部门 | `user_id` + `department` 过滤 |
+| **部门负责人** | 本部门 + 子部门 | `is_department_leader()` + 递归查询 |
+| **项目成员** | 项目相关（跨部门） | `project` 标签授权 |
+| **知识管理员** | 公司级知识库 | `visibility: company` + 特殊角色 |
+| **系统管理员** | 所有数据 | RLS bypass (角色级别) |
+
+### 7.5 权限检查流程
+
+```
+用户请求 → wechat-gateway
+    ↓
+【Step 1: 身份验证】
+    │ - 企业微信签名验证
+    │ - 用户ID验证
+    ↓
+【Step 2: 获取用户信息】
+    │ - wecom_org.get_user_detail()
+    │ - 获取部门、角色、权限
+    ↓
+【Step 3: 构造隔离上下文】
+    │ - user_id = f"wecom:{userid}"
+    │ - agent_instance_id = f"dept_{dept_id}_note"
+    │ - department = [1, 3]
+    ↓
+【Step 4: 构造Scene Tags过滤】
+    │ - filters = {"scene_tags.department": [1, 3]}
+    │ - 如果是leader，增加子部门
+    │ - 如果有项目权限，增加project过滤
+    ↓
+【Step 5: 调用Memory Client】
+    │ - 携带user_id + filters
+    │ ↓
+    │ ai-factory
+    │     ↓
+    │ 【Step 6: 设置RLS上下文】
+    │     │ - SET app.current_user_id = 'wecom:zhangsan'
+    │     │ - SET app.current_agent_instance_id = 'dept_001_note'
+    │     ↓
+    │ 【Step 7: 执行SQL查询】
+    │     │ - RLS自动过滤
+    │     │ - Scene Tags显式过滤
+    │     ↓
+    │ 返回结果
+    ↓
+返回给用户
+```
+
+### 7.6 安全审计日志
+
+**审计事件类型**：
+
+```python
+# 关键操作审计
+AUDIT_EVENTS = {
+    "search_entries": "搜索知识条目",
+    "create_entry": "创建知识条目",
+    "update_entry": "修改知识条目",
+    "delete_entry": "删除知识条目",
+    "cross_department_access": "跨部门访问",
+    "permission_denied": "权限拒绝",
+    "admin_operation": "管理员操作"
+}
+
+# 审计日志示例
+async def log_audit_event(
+    user_id: str,
+    event_type: str,
+    resource: str,
+    action: str,
+    details: Dict[str, Any]
+):
+    audit_log = {
+        "timestamp": datetime.utcnow().isoformat(),
+        "user_id": user_id,
+        "event_type": event_type,
+        "resource": resource,
+        "action": action,
+        "details": details,
+        "ip_address": get_client_ip(),
+        "user_agent": get_user_agent()
+    }
+    
+    # 写入审计表
+    await db.execute(
+        "INSERT INTO audit_logs (data) VALUES (:data)",
+        {"data": json.dumps(audit_log)}
+    )
+    
+    # 关键事件发送告警
+    if event_type in ["cross_department_access", "permission_denied", "admin_operation"]:
+        await send_security_alert(audit_log)
+
+# 使用示例
+await log_audit_event(
+    user_id="wecom:zhangsan",
+    event_type="search_entries",
+    resource="entries",
+    action="search",
+    details={
+        "query": "接口联调",
+        "filters": {"department": [1]},
+        "result_count": 25
+    }
+)
+```
+
+### 7.7 权限管理最佳实践
+
+**1. 默认拒绝原则**
+```python
+# 错误做法：默认允许所有操作
+if not is_explicitly_denied(user_id, resource):
+    allow_access()
+
+# 正确做法：默认拒绝，需要明确授权
+if is_explicitly_allowed(user_id, resource):
+    allow_access()
+else:
+    deny_access()
+```
+
+**2. 最小权限原则**
+```python
+# 只授予必要的权限
+def get_search_scope(user_id: str, operation: str) -> Dict:
+    base_scope = {"user_id": user_id}  # 基本权限：只看自己
+    
+    if operation == "view_team_notes":
+        if is_department_leader(user_id):
+            # leader可以看团队
+            base_scope["department"] = get_user_departments(user_id)
+    
+    return base_scope
+```
+
+**3. 定期权限审计**
+```python
+# 每月审计一次权限配置
+async def audit_permissions():
+    # 1. 检查过期授权
+    expired_grants = await find_expired_permission_grants()
+    
+    # 2. 检查异常访问模式
+    anomalies = await detect_access_anomalies()
+    
+    # 3. 生成审计报告
+    report = generate_audit_report(expired_grants, anomalies)
+    
+    # 4. 发送给安全团队
+    await send_audit_report(report)
+```
+
+---
+
+## 8. 风险与挑战
+
+### 8.1 技术风险
 
 | 风险 | 影响 | 概率 | 缓解措施 | 状态 |
 |------|------|------|---------|------|
 | **消息量大，L1存储压力** | 中 | 高 | 热数据保留策略+冷数据归档 | ✅已有方案 |
 | **向量计算性能** | 中 | 中 | 批量向量化+异步处理 | ✅已优化 |
 | **数据隔离失效** | 高 | 低 | RLS双重保障+定期审计 | ✅已实施 |
+| **权限绕过攻击** | 高 | 低 | 数据库层+应用层双重检查 | ✅已设计 |
 | **API调用失败** | 中 | 中 | 重试机制+降级方案 | ⚠️需实现 |
+| **跨部门数据泄露** | 高 | 低 | Scene Tags严格校验+审计日志 | ✅已设计 |
 | **数据迁移问题** | 低 | 低 | 现有group_chat数据较少 | ✅风险低 |
 
 ### 7.2 性能挑战

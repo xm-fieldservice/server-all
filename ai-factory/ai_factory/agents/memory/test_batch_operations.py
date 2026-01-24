@@ -47,13 +47,27 @@ def test_entry_service_batch_operations():
         }
     ]
 
-    entry_ids = entry_service.batch_create_entries(batch_entries)
+    user_id = "test_user_batch"
+    agent_type = "test_agent_type"
+    agent_instance_id = "test_instance_001"
+
+    entry_ids = entry_service.batch_create_entries(
+        batch_entries,
+        user_id=user_id,
+        agent_type=agent_type,
+        agent_instance_id=agent_instance_id,
+    )
     print(f"✅ 批量创建成功: {len(entry_ids)} 个条目")
     print(f"   Entry IDs: {entry_ids}")
 
     # 2. 批量获取条目
     print("\n[2] 批量获取条目...")
-    entries = entry_service.batch_get_entries(entry_ids)
+    entries = entry_service.batch_get_entries(
+        entry_ids,
+        user_id=user_id,
+        agent_type=agent_type,
+        agent_instance_id=agent_instance_id,
+    )
     print(f"✅ 批量获取成功: {len(entries)} 个条目")
     for entry_id, entry_data in entries.items():
         print(f"   - {entry_id}: {entry_data.get('title')}")
@@ -73,18 +87,33 @@ def test_entry_service_batch_operations():
         }
     ]
 
-    update_results = entry_service.batch_update_entries(updates)
+    update_results = entry_service.batch_update_entries(
+        updates,
+        user_id=user_id,
+        agent_type=agent_type,
+        agent_instance_id=agent_instance_id,
+    )
     print(f"✅ 批量更新成功: {sum(1 for v in update_results.values() if v)} / {len(update_results)}")
 
     # 验证更新
-    updated_entries = entry_service.batch_get_entries([entry_ids[0], entry_ids[1]])
+    updated_entries = entry_service.batch_get_entries(
+        [entry_ids[0], entry_ids[1]],
+        user_id=user_id,
+        agent_type=agent_type,
+        agent_instance_id=agent_instance_id,
+    )
     for entry_id, entry_data in updated_entries.items():
         print(f"   - {entry_id}: {entry_data.get('title')}, importance={entry_data.get('importance')}")
 
     # 4. 清理
     print("\n[4] 清理测试数据...")
     for entry_id in entry_ids:
-        entry_service.delete_entry(entry_id)
+        entry_service.delete_entry(
+            entry_id,
+            user_id=user_id,
+            agent_type=agent_type,
+            agent_instance_id=agent_instance_id,
+        )
     print(f"✅ 清理完成")
 
     return True
@@ -121,6 +150,10 @@ def test_vector_client_batch_operations():
     print("\n[2] 批量创建条目并添加向量...")
     entry_service = EntryService()
 
+    user_id = "test_user_batch"
+    agent_type = "test_agent_type"
+    agent_instance_id = "test_instance_001"
+
     entries = []
     entry_ids = []
 
@@ -132,7 +165,12 @@ def test_vector_client_batch_operations():
             "agent_id": "test_vector_batch",
             "space_type": "test"
         }
-        entry_service.create_entry(entry)
+        entry_service.create_entry(
+            entry,
+            user_id=user_id,
+            agent_type=agent_type,
+            agent_instance_id=agent_instance_id,
+        )
         entry_ids.append(entry["entry_id"])
 
         entries.append({
@@ -160,7 +198,12 @@ def test_vector_client_batch_operations():
 
     search_results = vector_client.batch_search_entries(
         query_embeddings=query_embeddings,
-        filters={"agent_id": "test_vector_batch"},
+        filters={
+            "agent_id": "test_vector_batch",
+            "user_id": user_id,
+            "agent_type": agent_type,
+            "agent_instance_id": agent_instance_id,
+        },
         top_k=3
     )
 
@@ -172,7 +215,12 @@ def test_vector_client_batch_operations():
     # 5. 清理
     print("\n[5] 清理测试数据...")
     for entry_id in entry_ids:
-        entry_service.delete_entry(entry_id)
+        entry_service.delete_entry(
+            entry_id,
+            user_id=user_id,
+            agent_type=agent_type,
+            agent_instance_id=agent_instance_id,
+        )
     print(f"✅ 清理完成")
 
     return True

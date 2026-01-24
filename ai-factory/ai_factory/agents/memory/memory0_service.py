@@ -30,13 +30,15 @@ class MemoryRelation(str, Enum):
 
 @dataclass
 class MemoryCandidate:
-    """记忆候选"""
+    """记忆候选（V3.0: 支持四层隔离字段）"""
     content: str
     user_id: str
     agent_id: str
-    scene_tags: Dict[str, List[str]]
-    space_type: str
-    metadata: Dict[str, Any]
+    agent_type: Optional[str] = None  # V3.0
+    agent_instance_id: Optional[str] = None  # V3.0
+    scene_tags: Dict[str, List[str]] = None
+    space_type: str = "note"
+    metadata: Dict[str, Any] = None
 
 
 @dataclass
@@ -161,16 +163,18 @@ class Memory0Service:
             # 如果embedding生成失败，直接作为NEW处理
             return self._handle_new(candidate, None)
 
-        # 2. 检索相似条目
+        # 2. 检索相似条目（V3.0: 使用 EntryService 强制隔离参数）
         filters = {
-            "user_id": candidate.user_id,
             "agent_id": candidate.agent_id,
             "space_type": candidate.space_type,
         }
         similar_entries = self.entry_service.search_similar(
             query_embedding=candidate_embedding,
             filters=filters,
-            top_k=self.TOP_K_CANDIDATES
+            top_k=self.TOP_K_CANDIDATES,
+            user_id=candidate.user_id,
+            agent_type=candidate.agent_type,
+            agent_instance_id=candidate.agent_instance_id,
         )
 
         # 3. 如果没有相似条目，直接判定为NEW
@@ -204,29 +208,48 @@ class Memory0Service:
             MemoryResult: 治理结果
         """
         # 1. 获取条目信息
-        entry = self.entry_service.get_entry(entry_id)
-        if entry is None:
-            raise ValueError(f"Entry {entry_id} not found")
+        # 说明：EntryService.get_entry 在 V3.0 强制需要 user_id；这里是 Worker 消费入口，先无隔离读取一次拿到隔离字段。
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM entries WHERE entry_id = %s", (entry_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError(f"Entry {entry_id} not found")
+                col_names = [desc[0] for desc in cur.description]
+                entry = dict(zip(col_names, row))
 
-        # 2. 构造候选对象
+        # 2. 构造候选对象（V3.0: 携带隔离字段）
         candidate = MemoryCandidate(
             content=entry.get("content", ""),
             user_id=entry.get("user_id", "default"),
             agent_id=entry.get("agent_id", "default"),
-            scene_tags=entry.get("scene_tags", {}),
-            space_type=entry.get("space_type", "note"),
-            metadata=entry.get("metadata", {})
+            agent_type=entry.get("agent_type"),
+            agent_instance_id=entry.get("agent_instance_id"),
+            scene_tags=entry.get("scene_tags", {}) or {},
+            space_type=entry.get("space_type", "note") or "note",
+            metadata=entry.get("extra_meta") or entry.get("metadata") or {},
         )
 
         # 3. 调用 upsert_memory 进行治理
         result = self.upsert_memory(candidate)
 
-        # 4. 如果是NEW，更新原条目的importance和last_seen_at
+        # 4. 如果是NEW，更新原条目的importance和last_seen_at（V3.0: 传递四层隔离参数）
         if result.relation == MemoryRelation.NEW:
-            self._update_entry_importance(entry_id, 1.0)
-        # 如果是UPDATE或DUPLICATE，更新原条目的usage_count和last_seen_at
+            self._update_entry_importance(
+                entry_id,
+                1.0,
+                candidate.user_id,
+                candidate.agent_type,
+                candidate.agent_instance_id,
+            )
+        # 如果是UPDATE或DUPLICATE，更新原条目的usage_count和last_seen_at（V3.0: 传递四层隔离参数）
         elif result.relation in (MemoryRelation.UPDATE, MemoryRelation.DUPLICATE):
-            self._update_entry_usage(entry_id)
+            self._update_entry_usage(
+                entry_id,
+                candidate.user_id,
+                candidate.agent_type,
+                candidate.agent_instance_id,
+            )
 
         return result
 
@@ -244,17 +267,22 @@ class Memory0Service:
         Returns:
             MemoryResult: 治理结果
         """
-        entry_id = self.entry_service.create_entry({
-            "entry_id": f"ent_{uuid.uuid4().hex}",
-            "title": candidate.metadata.get("title", "Memory Entry"),
-            "content": candidate.content,
-            "scene_tags": candidate.scene_tags,
-            "agent_id": candidate.agent_id,
-            "space_type": candidate.space_type,
-            "importance": 1.0,
-            "usage_count": 0,
-            "last_seen_at": datetime.now(),
-        })
+        entry_id = self.entry_service.create_entry(
+            {
+                "entry_id": f"ent_{uuid.uuid4().hex}",
+                "title": (candidate.metadata or {}).get("title", "Memory Entry"),
+                "content": candidate.content,
+                "scene_tags": candidate.scene_tags,
+                "agent_id": candidate.agent_id,
+                "space_type": candidate.space_type,
+                "importance": 1.0,
+                "usage_count": 0,
+                "last_seen_at": datetime.now(),
+            },
+            user_id=candidate.user_id,
+            agent_type=candidate.agent_type,
+            agent_instance_id=candidate.agent_instance_id,
+        )
 
         # 生成embedding
         if embedding is not None:
@@ -305,8 +333,8 @@ class Memory0Service:
         is_duplicate = self._is_duplicate(candidate.content, existing_content)
 
         if is_duplicate:
-            # 判定为DUPLICATE
-            self._update_entry_usage(existing_entry_id)
+            # 判定为DUPLICATE（V3.0: 传递四层隔离参数）
+            self._update_entry_usage(existing_entry_id, candidate.user_id, None, None)
             return MemoryResult(
                 relation=MemoryRelation.DUPLICATE,
                 entry_id=existing_entry_id,
@@ -367,9 +395,15 @@ class Memory0Service:
         Returns:
             MemoryResult: 治理结果
         """
-        # 更新原条目的importance、last_seen_at、usage_count
-        self._update_entry_importance(existing_entry_id, self.IMPORTANCE_UPDATE)  # 提升importance
-        self._update_entry_usage(existing_entry_id)
+        # 更新原条目的importance、last_seen_at、usage_count（V3.0: 传递四层隔离参数）
+        self._update_entry_importance(
+            existing_entry_id,
+            self.IMPORTANCE_UPDATE,
+            candidate.user_id,
+            candidate.agent_type,
+            candidate.agent_instance_id,
+        )  # 提升importance
+        self._update_entry_usage(existing_entry_id, candidate.user_id, None, None)
 
         return MemoryResult(
             relation=MemoryRelation.UPDATE,
@@ -394,22 +428,32 @@ class Memory0Service:
         Returns:
             MemoryResult: 治理结果
         """
-        # 1. 标记旧条目为deprecated
-        self._mark_entry_as_deprecated(existing_entry_id)
+        # 1. 标记旧条目为deprecated（V3.0: 传递隔离参数，避免误改跨租户数据）
+        self._mark_entry_as_deprecated(
+            existing_entry_id,
+            user_id=candidate.user_id,
+            agent_type=candidate.agent_type,
+            agent_instance_id=candidate.agent_instance_id,
+        )
 
         # 2. 创建新条目
-        new_entry_id = self.entry_service.create_entry({
-            "entry_id": f"ent_{uuid.uuid4().hex}",
-            "title": candidate.metadata.get("title", "Memory Entry"),
-            "content": candidate.content,
-            "scene_tags": candidate.scene_tags,
-            "agent_id": candidate.agent_id,
-            "space_type": candidate.space_type,
-            "importance": 1.5,  # OVERRIDE的新条目importance更高
-            "usage_count": 0,
-            "last_seen_at": datetime.now(),
-            "overridden_entry_ids": [existing_entry_id],
-        })
+        new_entry_id = self.entry_service.create_entry(
+            {
+                "entry_id": f"ent_{uuid.uuid4().hex}",
+                "title": (candidate.metadata or {}).get("title", "Memory Entry"),
+                "content": candidate.content,
+                "scene_tags": candidate.scene_tags,
+                "agent_id": candidate.agent_id,
+                "space_type": candidate.space_type,
+                "importance": 1.5,  # OVERRIDE的新条目importance更高
+                "usage_count": 0,
+                "last_seen_at": datetime.now(),
+                "overridden_entry_ids": [existing_entry_id],
+            },
+            user_id=candidate.user_id,
+            agent_type=candidate.agent_type,
+            agent_instance_id=candidate.agent_instance_id,
+        )
 
         # 3. 生成embedding
         if embedding is not None:
@@ -463,36 +507,64 @@ class Memory0Service:
         prefix_len = min(self.DUPLICATE_PREFIX_LEN, len(new_content), len(old_content))
         return new_content[:prefix_len] == old_content[:prefix_len]
 
-    def _update_entry_importance(self, entry_id: str, factor: float) -> None:
-        """更新条目的importance。
+    def _update_entry_importance(self, entry_id: str, factor: float, user_id: str, agent_type: Optional[str] = None, agent_instance_id: Optional[str] = None) -> None:
+        """更新条目的importance（V3.0: 添加四层隔离检查）。
 
         Args:
             entry_id: 条目ID
             factor: 乘数因子
+            user_id: 用户ID（V3.0: 必需）
+            agent_type: Agent类型（V3.0: 可选）
+            agent_instance_id: Agent实例ID（V3.0: 可选）
         """
         with connection_scope() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                # V3.0: 添加四层隔离过滤条件
+                conditions = ["entry_id = %s", "user_id = %s"]
+                params = [entry_id, user_id]
+
+                if agent_type:
+                    conditions.append("agent_type = %s")
+                    params.append(agent_type)
+                if agent_instance_id:
+                    conditions.append("agent_instance_id = %s")
+                    params.append(agent_instance_id)
+
+                cur.execute(f"""
                     UPDATE entries
                     SET importance = importance * %s,
                         last_seen_at = CURRENT_TIMESTAMP
-                    WHERE entry_id = %s
-                """, (factor, entry_id))
+                    WHERE {' AND '.join(conditions)}
+                """, params + [factor])
 
-    def _update_entry_usage(self, entry_id: str) -> None:
-        """更新条目的usage_count和last_seen_at。
+    def _update_entry_usage(self, entry_id: str, user_id: str, agent_type: Optional[str] = None, agent_instance_id: Optional[str] = None) -> None:
+        """更新条目的usage_count和last_seen_at（V3.0: 添加四层隔离检查）。
 
         Args:
             entry_id: 条目ID
+            user_id: 用户ID（V3.0: 必需）
+            agent_type: Agent类型（V3.0: 可选）
+            agent_instance_id: Agent实例ID（V3.0: 可选）
         """
         with connection_scope() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                # V3.0: 添加四层隔离过滤条件
+                conditions = ["entry_id = %s", "user_id = %s"]
+                params = [entry_id, user_id]
+
+                if agent_type:
+                    conditions.append("agent_type = %s")
+                    params.append(agent_type)
+                if agent_instance_id:
+                    conditions.append("agent_instance_id = %s")
+                    params.append(agent_instance_id)
+
+                cur.execute(f"""
                     UPDATE entries
                     SET usage_count = usage_count + 1,
                         last_seen_at = CURRENT_TIMESTAMP
-                    WHERE entry_id = %s
-                """, (entry_id,))
+                    WHERE {' AND '.join(conditions)}
+                """, params)
 
     def _handle_with_llm_judgment(
         self,
@@ -529,7 +601,8 @@ class Memory0Service:
             if relation == "new":
                 return self._handle_new(candidate, embedding)
             elif relation == "duplicate":
-                self._update_entry_usage(existing_entry_id)
+                # V3.0: 传递四层隔离参数
+                self._update_entry_usage(existing_entry_id, candidate.user_id, None, None)
                 return MemoryResult(
                     relation=MemoryRelation.DUPLICATE,
                     entry_id=existing_entry_id,
@@ -548,7 +621,7 @@ class Memory0Service:
         except Exception as e:
             # LLM 判定失败，回退到规则判定
             print(f"[Memory0Service] Warning: LLM judgment failed: {e}, falling back to rule-based judgment")
-            
+
             # 检查是否有冲突信号
             has_conflict = self._detect_conflict(candidate.content, existing_content)
 
@@ -557,25 +630,51 @@ class Memory0Service:
             else:
                 return self._handle_update(candidate, embedding, existing_entry_id)
 
-    def _mark_entry_as_deprecated(self, entry_id: str) -> None:
-        """标记条目为deprecated。
+    def _mark_entry_as_deprecated(
+        self,
+        entry_id: str,
+        user_id: str,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
+    ) -> None:
+        """标记条目为deprecated（V3.0: 添加隔离过滤）。
 
         Args:
             entry_id: 条目ID
+            user_id: 用户ID（必需）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
         """
+        conditions = ["entry_id = %s", "user_id = %s"]
+        params: List[Any] = [entry_id, user_id]
+        if agent_type is not None:
+            conditions.append("agent_type = %s")
+            params.append(agent_type)
+        if agent_instance_id is not None:
+            conditions.append("agent_instance_id = %s")
+            params.append(agent_instance_id)
+
+        where_clause = " AND ".join(conditions)
+
         with connection_scope() as conn:
             with conn.cursor() as cur:
-                # 将is_latest标记为FALSE
-                cur.execute("""
+                # 将 is_latest 标记为 FALSE
+                cur.execute(
+                    f"""
                     UPDATE entries
                     SET is_latest = FALSE,
                         last_seen_at = CURRENT_TIMESTAMP
-                    WHERE entry_id = %s
-                """, (entry_id,))
+                    WHERE {where_clause}
+                    """,
+                    params,
+                )
 
-                # 在extra_meta中添加deprecated标记
-                cur.execute("""
+                # 在 extra_meta 中添加 deprecated 标记
+                cur.execute(
+                    f"""
                     UPDATE entries
-                    SET extra_meta = COALESCE(extra_meta, '{}'::jsonb) || '{"deprecated": true}'::jsonb
-                    WHERE entry_id = %s
-                """, (entry_id,))
+                    SET extra_meta = COALESCE(extra_meta, '{{}}'::jsonb) || '{{"deprecated": true}}'::jsonb
+                    WHERE {where_clause}
+                    """,
+                    params,
+                )

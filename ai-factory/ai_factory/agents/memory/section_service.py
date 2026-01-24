@@ -213,7 +213,10 @@ class SectionService:
         # 6. 将旧版本标记为非最新
         self._mark_old_versions_as_not_latest(section_id)
 
-        # 7. 写入entries表（通过EntryService，V3升级：包含四层隔离字段）
+        # 7. 写入entries表（通过EntryService，V3升级：传递四层隔离参数）
+        if user_id is None:
+            raise ValueError("user_id is required for creating entry")
+
         entry_id = self.entry_service.create_entry({
             "entry_id": f"ent_{uuid.uuid4().hex}",
             "title": section_title,
@@ -223,12 +226,9 @@ class SectionService:
             "section_version": section_version,
             "is_latest": True,
             "agent_id": agent_id,
-            "user_id": user_id,  # V3新增
-            "agent_type": agent_type,  # V3新增
-            "agent_instance_id": agent_instance_id,  # V3新增
             "source_session_id": session_id,
             "space_type": "note",  # 默认为笔记类型
-        })
+        }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
 
         # 8. 生成embedding并写入entry_embeddings表
         try:
@@ -477,7 +477,10 @@ class SectionService:
         # 5. 将旧版本标记为非最新
         self._mark_old_versions_as_not_latest(target_section_id)
 
-        # 6. 写入entries表（V3升级：包含四层隔离字段）
+        # 6. 写入entries表（V3升级：传递四层隔离参数）
+        if user_id is None:
+            raise ValueError("user_id is required for creating entry")
+
         entry_id = self.entry_service.create_entry({
             "entry_id": f"ent_{uuid.uuid4().hex}",
             "title": f"Merged Section {target_section_id}",
@@ -487,11 +490,8 @@ class SectionService:
             "section_version": section_version,
             "is_latest": True,
             "agent_id": agent_id,
-            "user_id": user_id,  # V3新增
-            "agent_type": agent_type,  # V3新增
-            "agent_instance_id": agent_instance_id,  # V3新增
             "space_type": "note",
-        })
+        }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
 
         # 7. 生成embedding
         try:

@@ -7,8 +7,14 @@ wrapping the underlying pgvector implementation.
 from __future__ import annotations
 
 from typing import List, Dict, Any, Optional
-from ai_factory.db.pgvector_client import connection_scope
+import logging
 import json
+
+from ai_factory.db.pgvector_client import connection_scope
+from psycopg2.extras import Json
+
+
+logger = logging.getLogger(__name__)
 
 
 class VectorClient:
@@ -40,60 +46,117 @@ class VectorClient:
         """
         with connection_scope() as conn:
             with conn.cursor() as cur:
-                # 构建查询条件
-                conditions = []
-                params = []
+                # 构建查询条件（V3.0: 支持四层隔离过滤）
+                conditions: List[str] = []
+                params: List[Any] = []
 
                 if filters:
+                    # 四层隔离字段
+                    if filters.get("user_id") is not None:
+                        conditions.append("e.user_id = %s")
+                        params.append(filters["user_id"])
+                    if filters.get("agent_type") is not None:
+                        conditions.append("e.agent_type = %s")
+                        params.append(filters["agent_type"])
+                    if filters.get("agent_instance_id") is not None:
+                        conditions.append("e.agent_instance_id = %s")
+                        params.append(filters["agent_instance_id"])
+
+                    # 常用业务过滤
+                    if filters.get("agent_id") is not None:
+                        conditions.append("e.agent_id = %s")
+                        params.append(filters["agent_id"])
+                    if filters.get("space_type") is not None:
+                        conditions.append("e.space_type = %s")
+                        params.append(filters["space_type"])
+                    if filters.get("project_code") is not None:
+                        conditions.append("e.project_code = %s")
+                        params.append(filters["project_code"])
+                    if filters.get("parent_entry_id") is not None:
+                        conditions.append("e.parent_entry_id = %s")
+                        params.append(filters["parent_entry_id"])
+
                     # section_id 过滤
-                    if "section_id" in filters:
+                    if filters.get("section_id") is not None:
                         conditions.append("e.section_id = %s")
                         params.append(filters["section_id"])
 
                     # entry_type 过滤
-                    if "entry_type" in filters:
+                    if filters.get("entry_type") is not None:
                         conditions.append("e.entry_type = %s")
                         params.append(filters["entry_type"])
 
+                    # 只取最新版本
+                    if filters.get("only_latest") is True:
+                        conditions.append("e.is_latest = TRUE")
+
+                    # scene_tags（jsonb）硬过滤
+                    scene_tags = filters.get("scene_tags")
+                    if isinstance(scene_tags, dict) and scene_tags:
+                        conditions.append("e.scene_tags @> %s")
+                        params.append(Json(scene_tags))
+
                 where_clause = " AND ".join(conditions) if conditions else "TRUE"
 
-                # 简化版向量相似度查询（适配记忆系统表结构）
+                # 向量相似度查询（返回 title/summary_ai 便于上层展示与摘要）
                 sql = f"""
                     SELECT
                         e.entry_id,
+                        e.title,
+                        e.summary_ai,
                         e.content,
                         e.entry_type,
                         e.section_id,
+                        e.scene_tags,
+                        e.extra_meta,
                         e.created_at,
                         1 - (emb.embedding <=> %s::vector) AS similarity
                     FROM entries e
                     LEFT JOIN entry_embeddings emb ON e.entry_id = emb.entry_id
                     WHERE {where_clause}
-                    ORDER BY similarity DESC
+                    ORDER BY similarity DESC NULLS LAST
                     LIMIT %s
                 """
 
-                # 添加查询向量和 top_k 参数
                 query_params = [query_embedding] + params + [top_k]
                 cur.execute(sql, query_params)
 
                 rows = cur.fetchall()
-                results = [
-                    {
-                        "entry_id": row[0],
-                        "content": row[1],
-                        "entry_type": row[2],
-                        "section_id": row[3],
-                        "created_at": row[4].isoformat() if row[4] else None,
-                        "similarity": float(row[5]) if row[5] is not None else None,
-                    }
-                    for row in rows
-                ]
+                results: List[Dict[str, Any]] = []
+                for row in rows:
+                    scene_tags_val = row[6]
+                    extra_meta_val = row[7]
+                    # 兼容旧库：如果是字符串，尝试 json.loads
+                    if isinstance(scene_tags_val, str):
+                        try:
+                            scene_tags_val = json.loads(scene_tags_val)
+                        except Exception:
+                            pass
+                    if isinstance(extra_meta_val, str):
+                        try:
+                            extra_meta_val = json.loads(extra_meta_val)
+                        except Exception:
+                            pass
 
-                # 应用相似度阈值过滤
+                    results.append(
+                        {
+                            "entry_id": row[0],
+                            "title": row[1],
+                            "summary_ai": row[2],
+                            "content": row[3],
+                            "entry_type": row[4],
+                            "section_id": row[5],
+                            "scene_tags": scene_tags_val,
+                            "extra_meta": extra_meta_val,
+                            "created_at": row[8].isoformat() if row[8] else None,
+                            "similarity": float(row[9]) if row[9] is not None else None,
+                        }
+                    )
+
                 if threshold is not None:
-                    results = [r for r in results if r["similarity"] >= threshold]
+                    results = [r for r in results if (r.get("similarity") is not None and r["similarity"] >= threshold)]
 
+                logger.debug("Vector search returned %s results (filters=%s)", len(results), filters)
                 return results
 
     def upsert_embedding(

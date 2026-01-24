@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     user_id VARCHAR(64) NOT NULL,
     assistant_id VARCHAR(64) NOT NULL,
 
+    -- V3.0: 四层隔离字段
+    agent_type VARCHAR(64),
+    agent_instance_id VARCHAR(64),
+
     -- 会话元数据
     title VARCHAR(256),
     status VARCHAR(32) NOT NULL DEFAULT 'active',
@@ -34,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_sessions_assistant_id ON chat_sessions(assis
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_status ON chat_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_created_at ON chat_sessions(created_at);
 
+-- V3.0: 四层隔离索引
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_agent
+    ON chat_sessions(user_id, agent_type, agent_instance_id);
+
 COMMENT ON TABLE chat_sessions IS '会话表，存储用户与助手的对话会话';
 
 -- ============================================================
@@ -45,6 +53,11 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 
     -- 会话关联
     session_id VARCHAR(64) NOT NULL,
+
+    -- V3.0: 四层隔离字段（从 chat_sessions 继承写入，便于审计与查询过滤）
+    user_id VARCHAR(64),
+    agent_type VARCHAR(64),
+    agent_instance_id VARCHAR(64),
 
     -- 消息角色和类型
     role VARCHAR(16) NOT NULL,  -- 'user' | 'assistant' | 'system' | 'tool'
@@ -65,6 +78,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role);
 
+-- V3.0: 隔离过滤常用索引
+CREATE INDEX IF NOT EXISTS idx_chat_messages_user_agent_created
+    ON chat_messages(user_id, agent_type, agent_instance_id, created_at DESC);
+
 COMMENT ON TABLE chat_messages IS '消息表，存储会话中的所有消息';
 
 -- ============================================================
@@ -76,6 +93,11 @@ CREATE TABLE IF NOT EXISTS chat_sections (
 
     -- 会话关联
     session_id VARCHAR(64) NOT NULL,
+
+    -- V3.0: 四层隔离字段（从 chat_sessions 迁移/继承）
+    user_id VARCHAR(64),
+    agent_type VARCHAR(64),
+    agent_instance_id VARCHAR(64),
 
     -- 片段信息
     title VARCHAR(256),
@@ -104,6 +126,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_sections_agent_id ON chat_sections(agent_id)
 CREATE INDEX IF NOT EXISTS idx_chat_sections_created_at ON chat_sections(created_at);
 CREATE INDEX IF NOT EXISTS idx_chat_sections_completed_at ON chat_sections(completed_at);
 
+-- V3.0: 四层隔离索引
+CREATE INDEX IF NOT EXISTS idx_chat_sections_user_agent
+    ON chat_sections(user_id, agent_type, agent_instance_id);
+
 COMMENT ON TABLE chat_sections IS '聊天片段表，用于聚合和管理会话中的片段';
 
 -- ============================================================
@@ -117,6 +143,10 @@ CREATE TABLE IF NOT EXISTS qa_query_index (
     user_id VARCHAR(64) NOT NULL,
     assistant_id VARCHAR(64),
     tenant_id VARCHAR(64),
+
+    -- V3.0: 四层隔离字段
+    agent_type VARCHAR(64),
+    agent_instance_id VARCHAR(64),
 
     -- 问题信息
     normalized_question TEXT NOT NULL,
@@ -150,6 +180,11 @@ CREATE INDEX IF NOT EXISTS idx_qa_query_index_tenant_id ON qa_query_index(tenant
 CREATE INDEX IF NOT EXISTS idx_qa_query_index_status ON qa_query_index(status);
 CREATE INDEX IF NOT EXISTS idx_qa_query_index_hit_count ON qa_query_index(hit_count);
 CREATE INDEX IF NOT EXISTS idx_qa_query_index_last_hit_at ON qa_query_index(last_hit_at);
+
+-- V3.0: 四层隔离索引
+CREATE INDEX IF NOT EXISTS idx_qa_query_index_user_agent
+    ON qa_query_index(user_id, agent_type, agent_instance_id);
+
 CREATE INDEX IF NOT EXISTS idx_qa_query_index_question_embedding ON qa_query_index USING ivfflat (question_embedding vector_cosine_ops);
 
 COMMENT ON TABLE qa_query_index IS 'Q&A缓存表，用于快速响应重复问题';
