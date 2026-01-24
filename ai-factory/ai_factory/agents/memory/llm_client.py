@@ -13,6 +13,7 @@ import threading
 import asyncio
 import hashlib
 import time
+import logging
 from typing import List, Dict, Any, Optional, Tuple
 import httpx
 from pydantic import BaseModel
@@ -20,6 +21,8 @@ from dotenv import load_dotenv
 
 # 加载 .env 文件
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 class RequestCache:
@@ -245,13 +248,13 @@ class LLMClient:
 
                 # 如果是最后一次尝试，直接抛出异常
                 if attempt == self._max_retries - 1:
-                    print(f"[LLMClient] Max retries ({self._max_retries}) reached. Giving up.")
+                    logger.error(f"Max retries ({self._max_retries}) reached. Giving up.")
                     raise e
 
                 # 计算延迟时间（指数退避）
                 delay = self._retry_delay * (self._retry_backoff_factor ** attempt)
-                print(
-                    f"[LLMClient] Attempt {attempt + 1}/{self._max_retries} failed: {e}. "
+                logger.warning(
+                    f"Attempt {attempt + 1}/{self._max_retries} failed: {e}. "
                     f"Retrying in {delay:.1f}s..."
                 )
 
@@ -299,21 +302,21 @@ class LLMClient:
         if self._enable_cache and self._embedding_cache:
             cached_result = self._embedding_cache.get(url, data)
             if cached_result is not None:
-                print(f"[LLMClient] Embedding cache hit for text: {text[:50]}...")
+                logger.debug(f"Embedding cache hit for text: {text[:50]}...")
                 return cached_result
 
         # 定义请求函数（用于重试）
         async def _do_request():
             # Debug: 打印请求信息
-            print(f"[LLMClient] Embedding request: URL={url}, model={self._embedding_config.model}")
+            logger.debug(f"Embedding request: URL={url}, model={self._embedding_config.model}")
             response = await self._http_client.post(url, json=data, headers=headers)
-            print(f"[LLMClient] Embedding response: status={response.status_code}")
+            logger.debug(f"Embedding response: status={response.status_code}")
             if response.status_code != 200:
                 # 打印错误响应体
-                print(f"[LLMClient] Embedding error response: {response.text}")
+                logger.error(f"Embedding error response: {response.text}")
             response.raise_for_status()
             result = response.json()
-            print(f"[LLMClient] Embedding result keys: {list(result.keys())}")
+            logger.debug(f"Embedding result keys: {list(result.keys())}")
 
             # 提取 embedding（DashScope 原生格式：{"output": {"embeddings": [{"text_index": 0, "embedding": [...]}]}}）
             if "output" in result and "embeddings" in result["output"] and len(result["output"]["embeddings"]) > 0:
@@ -380,7 +383,7 @@ class LLMClient:
         if self._enable_cache and self._llm_cache and temperature < 0.3:
             cached_result = self._llm_cache.get(url, data)
             if cached_result is not None:
-                print(f"[LLMClient] Chat completion cache hit for messages: {messages[-1]['content'][:50]}...")
+                logger.debug(f"Chat completion cache hit for messages: {messages[-1]['content'][:50]}...")
                 return cached_result
 
         # 定义请求函数（用于重试）

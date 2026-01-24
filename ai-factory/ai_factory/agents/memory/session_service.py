@@ -135,7 +135,7 @@ class SessionService:
         agent_type: Optional[str] = None,  # V3.0
         agent_instance_id: Optional[str] = None  # V3.0
     ) -> str:
-        """创建新会话（V3.0: 支持四层隔离）。
+        """创建新会话（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             user_id: 用户ID
@@ -153,6 +153,8 @@ class SessionService:
         status = "active"
 
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO chat_sessions
@@ -172,15 +174,22 @@ class SessionService:
         session_id: str,
         role: str,
         content: str,
+        user_id: str,  # V3.1.2: 补齐参数
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
         msg_type: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        conn=None,
     ) -> str:
-        """添加消息到会话（V3.0: 从session继承四层隔离字段）。
+        """添加消息到会话（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             session_id: 会话ID
             role: 消息角色（user/assistant/system/tool）
             content: 消息内容
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
             msg_type: 消息类型（question/statement/answer/other，可选）
             metadata: 元数据（可选）
 
@@ -189,21 +198,31 @@ class SessionService:
         """
         message_id = f"msg_{uuid.uuid4().hex}"
 
-        with connection_scope() as conn:
+        if conn is None:
+            with connection_scope() as conn:
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO chat_messages
+                        (message_id, session_id, role, msg_type, content, metadata_json, created_at,
+                         user_id, agent_type, agent_instance_id)
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
+                        RETURNING message_id
+                    """, (message_id, session_id, role, msg_type, content,
+                           Json(metadata) if metadata else None,
+                           user_id, agent_type, agent_instance_id))
+        else:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
-                # V3.0: 从session获取四层隔离字段并继承到message
                 cur.execute("""
                     INSERT INTO chat_messages
                     (message_id, session_id, role, msg_type, content, metadata_json, created_at,
                      user_id, agent_type, agent_instance_id)
-                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP,
-                            (SELECT user_id FROM chat_sessions WHERE session_id = %s),
-                            (SELECT agent_type FROM chat_sessions WHERE session_id = %s),
-                            (SELECT agent_instance_id FROM chat_sessions WHERE session_id = %s))
+                    VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
                     RETURNING message_id
                 """, (message_id, session_id, role, msg_type, content,
                        Json(metadata) if metadata else None,
-                       session_id, session_id, session_id))
+                       user_id, agent_type, agent_instance_id))
 
         logger.debug(f"Appended message {message_id} to session {session_id} (V3.0: inherited isolation)")
         return message_id
@@ -212,32 +231,67 @@ class SessionService:
         self,
         session_id: str,
         limit: int = 20,
-        user_id: Optional[str] = None  # V3.0: 可选隔离过滤
+        user_id: Optional[str] = None,  # V3.0: 必需用于隔离
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
+        conn=None,
     ) -> List[MessageInfo]:
-        """获取会话的最近消息（按创建时间倒序）（V3.0: 支持四层继承）。
+        """获取会话的最近消息（按创建时间倒序）（V3.1.2: 强制 RLS 隔离）。
 
         Args:
             session_id: 会话ID
             limit: 返回消息数量限制
-            user_id: 用户ID（V3.0: 可选过滤）
+            user_id: 用户ID（必需）
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
 
         Returns:
             List[MessageInfo]: 消息列表
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
-                # V3.0: 添加四层隔离过滤（可选）
-                conditions = ["cm.session_id = %s"]
-                params = [session_id]
+        if not user_id:
+            raise ValueError("user_id is required for get_recent_messages")
 
-                if user_id:
-                    # 直接按 session 归属用户过滤，避免别名错误
-                    conditions.append("cs.user_id = %s")
-                    params.append(user_id)
+        if conn is None:
+            with connection_scope() as conn:
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+                with conn.cursor() as cur:
+                    conditions = ["cm.session_id = %s", "cs.user_id = %s"]
+                    params = [session_id, user_id]
+
+                    if agent_type:
+                        conditions.append("cs.agent_type = %s")
+                        params.append(agent_type)
+                    if agent_instance_id:
+                        conditions.append("cs.agent_instance_id = %s")
+                        params.append(agent_instance_id)
+
+                    cur.execute(f"""
+                        SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata_json, cm.created_at,
+                               cs.user_id, cs.agent_type, cs.agent_instance_id
+                        FROM chat_messages cm
+                        LEFT JOIN chat_sessions cs ON cm.session_id = cs.session_id
+                        WHERE {' AND '.join(conditions)}
+                        ORDER BY cm.created_at DESC
+                        LIMIT %s
+                    """, params + [limit])
+
+                    rows = cur.fetchall()
+        else:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            with conn.cursor() as cur:
+                conditions = ["cm.session_id = %s", "cs.user_id = %s"]
+                params = [session_id, user_id]
+
+                if agent_type:
+                    conditions.append("cs.agent_type = %s")
+                    params.append(agent_type)
+                if agent_instance_id:
+                    conditions.append("cs.agent_instance_id = %s")
+                    params.append(agent_instance_id)
 
                 cur.execute(f"""
                     SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata_json, cm.created_at,
-                           cs.user_id, cs.agent_type, cs.agent_instance_id  -- V3.0: 四层继承字段
+                           cs.user_id, cs.agent_type, cs.agent_instance_id
                     FROM chat_messages cm
                     LEFT JOIN chat_sessions cs ON cm.session_id = cs.session_id
                     WHERE {' AND '.join(conditions)}
@@ -246,45 +300,54 @@ class SessionService:
                 """, params + [limit])
 
                 rows = cur.fetchall()
-                return [
-                    MessageInfo(
-                        message_id=row[0],
-                        session_id=row[1],
-                        role=row[2],
-                        msg_type=row[3],
-                        content=row[4],
-                        metadata=row[5] if isinstance(row[5], dict) else None,
-                        created_at=row[6],
-                        user_id=row[7],  # V3.0
-                        agent_type=row[8],  # V3.0
-                        agent_instance_id=row[9]  # V3.0
-                    )
-                    for row in rows
-                ]
+
+        return [
+            MessageInfo(
+                message_id=row[0],
+                session_id=row[1],
+                role=row[2],
+                msg_type=row[3],
+                content=row[4],
+                metadata=row[5] if isinstance(row[5], dict) else None,
+                created_at=row[6],
+                user_id=row[7],
+                agent_type=row[8],
+                agent_instance_id=row[9]
+            )
+            for row in rows
+        ]
 
     def get_session_info(
         self,
         session_id: str,
-        user_id: Optional[str] = None  # V3.0: 可选隔离过滤
+        user_id: str,  # V3.1.2: 必需
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
     ) -> Optional[SessionInfo]:
-        """获取会话信息（V3.0: 支持四层隔离过滤）。
+        """获取会话信息（V3.1.2: 强制 RLS 过滤）。
 
         Args:
             session_id: 会话ID
-            user_id: 用户ID（V3.0: 可选过滤）
+            user_id: 用户ID（必需）
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
 
         Returns:
             SessionInfo: 会话信息，如果不存在则返回 None
         """
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
-                # V3.0: 添加四层隔离过滤（可选）
-                conditions = ["session_id = %s"]
-                params = [session_id]
+                # V3.0: 添加四层隔离过滤
+                conditions = ["session_id = %s", "user_id = %s"]
+                params = [session_id, user_id]
 
-                if user_id:
-                    conditions.append("user_id = %s")
-                    params.append(user_id)
+                if agent_type:
+                    conditions.append("agent_type = %s")
+                    params.append(agent_type)
+                if agent_instance_id:
+                    conditions.append("agent_instance_id = %s")
+                    params.append(agent_instance_id)
 
                 cur.execute(f"""
                     SELECT session_id, user_id, assistant_id, title, status,
@@ -319,7 +382,7 @@ class SessionService:
         agent_instance_id: Optional[str] = None,  # V3.0
         limit: int = 20
     ) -> List[SessionInfo]:
-        """获取用户的会话历史（V3.0: 支持四层隔离过滤）。
+        """获取用户的会话历史（V3.1.2: 强制 RLS 过滤）。
 
         Args:
             user_id: 用户ID
@@ -332,6 +395,7 @@ class SessionService:
             List[SessionInfo]: 会话列表
         """
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 conditions = ["user_id = %s"]
                 params = [user_id]
@@ -340,7 +404,7 @@ class SessionService:
                     conditions.append("assistant_id = %s")
                     params.append(assistant_id)
 
-                # V3.0: 添加四层隔离过滤（可选）
+                # V3.0: 添加四层隔离过滤
                 if agent_type:
                     conditions.append("agent_type = %s")
                     params.append(agent_type)
@@ -379,14 +443,18 @@ class SessionService:
     def update_session(
         self,
         session_id: str,
-        user_id: Optional[str] = None,  # V3.0: 可选隔离检查
+        user_id: str,  # V3.1.2: 必需
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
         **kwargs
     ) -> bool:
-        """更新会话信息（V3.0: 支持四层隔离检查）。
+        """更新会话信息（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             session_id: 会话ID
-            user_id: 用户ID（V3.0: 可选，用于隔离验证）
+            user_id: 用户ID（必需）
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
             **kwargs: 要更新的字段（title, status, metadata_json, related_entry_id）
 
         Returns:
@@ -410,76 +478,100 @@ class SessionService:
 
         updates.append("updated_at = CURRENT_TIMESTAMP")
         params.append(session_id)
+        params.append(user_id)
 
-        # V3.0: 添加user_id隔离检查（可选）
-        if user_id:
-            with connection_scope() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        UPDATE chat_sessions
-                        SET {', '.join(updates)}
-                        WHERE session_id = %s AND user_id = %s
-                    """, params + [user_id])
-                    updated = cur.rowcount > 0
-                    if updated:
-                        logger.debug(f"Updated session {session_id} with user_id check: {user_id}")
-                    return updated
-        else:
-            with connection_scope() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(f"""
-                        UPDATE chat_sessions
-                        SET {', '.join(updates)}
-                        WHERE session_id = %s
-                    """, params)
-                    return cur.rowcount > 0
+        with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            with conn.cursor() as cur:
+                # V3.1.2: 添加四层隔离过滤
+                conditions = ["session_id = %s", "user_id = %s"]
+                if agent_type:
+                    conditions.append("agent_type = %s")
+                    params.append(agent_type)
+                if agent_instance_id:
+                    conditions.append("agent_instance_id = %s")
+                    params.append(agent_instance_id)
 
-    def archive_session(self, session_id: str) -> bool:
-        """归档会话。
+                cur.execute(f"""
+                    UPDATE chat_sessions
+                    SET {', '.join(updates)}
+                    WHERE {' AND '.join(conditions)}
+                """, params)
+                updated = cur.rowcount > 0
+                if updated:
+                    logger.debug(f"Updated session {session_id} with isolation check")
+                return updated
+
+    def archive_session(
+        self,
+        session_id: str,
+        user_id: str,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
+    ) -> bool:
+        """归档会话（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             session_id: 会话ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
 
         Returns:
             bool: 是否归档成功
         """
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE chat_sessions
                     SET status = 'archived', updated_at = CURRENT_TIMESTAMP
-                    WHERE session_id = %s
-                """, (session_id,))
+                    WHERE session_id = %s AND user_id = %s
+                """, (session_id, user_id))
                 return cur.rowcount > 0
 
-    def delete_session(self, session_id: str) -> bool:
-        """删除会话（软删除，标记为 deleted 状态）。
+    def delete_session(
+        self,
+        session_id: str,
+        user_id: str,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
+    ) -> bool:
+        """删除会话（软删除，标记为 deleted 状态）（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             session_id: 会话ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
 
         Returns:
             bool: 是否删除成功
         """
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 cur.execute("""
                     UPDATE chat_sessions
                     SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
-                    WHERE session_id = %s
-                """, (session_id,))
+                    WHERE session_id = %s AND user_id = %s
+                """, (session_id, user_id))
                 return cur.rowcount > 0
 
     def batch_append_messages(
         self,
-        messages: List[Dict[str, Any]]
+        messages: List[Dict[str, Any]],
+        user_id: str,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
     ) -> List[str]:
-        """批量添加消息到会话（V3.0: 从session继承四层隔离字段）。
-
-        使用批量插入提高性能。
+        """批量添加消息到会话（V3.1.2: 强制 RLS 上下文）。
 
         Args:
-            messages: 消息列表，每个消息必须包含 "session_id", "role", "content" 字段
+            messages: 消息列表
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
 
         Returns:
             List[str]: message_id 列表
@@ -490,6 +582,7 @@ class SessionService:
         message_ids = []
 
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 for msg_data in messages:
                     message_id = f"msg_{uuid.uuid4().hex}"
@@ -499,35 +592,37 @@ class SessionService:
                     msg_type = msg_data.get("msg_type")
                     metadata = msg_data.get("metadata")
 
-                    # V3.0: 从session获取四层隔离字段并继承到message
                     cur.execute("""
                         INSERT INTO chat_messages
                         (message_id, session_id, role, msg_type, content, metadata_json, created_at,
                          user_id, agent_type, agent_instance_id)
-                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP,
-                                (SELECT user_id FROM chat_sessions WHERE session_id = %s),
-                                (SELECT agent_type FROM chat_sessions WHERE session_id = %s),
-                                (SELECT agent_instance_id FROM chat_sessions WHERE session_id = %s))
+                        VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
                         RETURNING message_id
                     """, (message_id, session_id, role, msg_type, content,
                            Json(metadata) if metadata else None,
-                           session_id, session_id, session_id))
+                           user_id, agent_type, agent_instance_id))
 
                     row = cur.fetchone()
                     message_ids.append(row[0] if row else message_id)
 
-        logger.debug(f"Batch appended {len(message_ids)} messages (V3.0: inherited isolation)")
+        logger.debug(f"Batch appended {len(message_ids)} messages with isolation")
         return message_ids
 
     def batch_get_recent_messages(
         self,
         session_ids: List[str],
+        user_id: str,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
         limit: int = 20
     ) -> Dict[str, List[MessageInfo]]:
-        """批量获取多个会话的最近消息（V3.0: 支持四层隔离字段）。
+        """批量获取多个会话的最近消息（V3.1.2: 强制 RLS 隔离）。
 
         Args:
             session_ids: 会话ID列表
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
             limit: 每个会话返回消息数量限制
 
         Returns:
@@ -539,17 +634,17 @@ class SessionService:
         results = {}
 
         with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 placeholders = ', '.join(['%s'] * len(session_ids))
-                # V3.0: 查询包含四层隔离字段
+                # V3.1.2: 添加隔离过滤
                 cur.execute(f"""
-                    SELECT message_id, session_id, role, msg_type, content, metadata_json, created_at,
+                    SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata_json, cm.created_at,
                            cm.user_id, cm.agent_type, cm.agent_instance_id
                     FROM chat_messages cm
-                    LEFT JOIN chat_sessions cs ON cm.session_id = cs.session_id
-                    WHERE cm.session_id IN ({placeholders})
-                    ORDER BY cm.session_id, cm.created_at DESC
-                """, session_ids)
+                    JOIN chat_sessions cs ON cm.session_id = cs.session_id
+                    WHERE cm.session_id IN ({placeholders}) AND cs.user_id = %s
+                """, session_ids + [user_id])
 
                 rows = cur.fetchall()
 
@@ -559,7 +654,6 @@ class SessionService:
                     if session_id not in results:
                         results[session_id] = []
 
-                    # V3.0: 包含四层隔离字段
                     results[session_id].append(
                         MessageInfo(
                             message_id=row[0],
@@ -579,6 +673,6 @@ class SessionService:
         for session_id in results:
             results[session_id] = results[session_id][:limit]
 
-        logger.debug(f"Batch got recent messages for {len(results)} sessions (V3.0: with isolation)")
+        logger.debug(f"Batch got recent messages for {len(results)} sessions with isolation")
         return results
 

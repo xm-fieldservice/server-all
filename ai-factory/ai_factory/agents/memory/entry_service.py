@@ -182,6 +182,8 @@ class EntryService:
             sql = f"INSERT INTO entries ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING entry_id"
 
             with connection_scope() as conn:
+                # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+                self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
                 with conn.cursor() as cur:
                     cur.execute(sql, payload)
                     row = cur.fetchone()
@@ -251,10 +253,10 @@ class EntryService:
     def search_similar(
         self,
         query_embedding: List[float],
+        user_id: str,  # V3.0: 必需
         filters: Dict[str, Any],
         top_k: int = 10,
         threshold: Optional[float] = None,
-        user_id: str,  # V3.0: 必需
         agent_type: Optional[str] = None,
         agent_instance_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
@@ -349,6 +351,8 @@ class EntryService:
                 params.append(agent_instance_id)
 
             with connection_scope() as conn:
+                # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+                self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
                 with conn.cursor() as cur:
                     cur.execute(f"""
                         UPDATE entries
@@ -385,6 +389,8 @@ class EntryService:
         """
         try:
             with connection_scope() as conn:
+                # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+                self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
                 with conn.cursor() as cur:
                     # V3.0: 添加四层隔离过滤条件（向量删除也要检查）
                     entry_conditions = ["entry_id = %s", "user_id = %s"]
@@ -407,11 +413,14 @@ class EntryService:
                         logger.warning(f"Failed to delete entry {entry_id} (not found or isolation mismatch)")
                         return False
 
-                    # 先删除向量（通过子查询确保只删除符合条件的条目的向量）
+                    # 先删除向量（V3.1.2 修复：使用子查询确保只删除属于当前用户的条目的向量，防止越权删除）
                     cur.execute(f"""
                         DELETE FROM entry_embeddings
-                        WHERE entry_id = %s
-                    """, (entry_id,))
+                        WHERE entry_id IN (
+                            SELECT entry_id FROM entries
+                            WHERE entry_id = %s AND user_id = %s
+                        )
+                    """, (entry_id, user_id))
 
                     # 再删除条目（带四层隔离过滤）
                     cur.execute(f"""
@@ -453,6 +462,8 @@ class EntryService:
         """
         try:
             with connection_scope() as conn:
+                # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+                self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
                 with conn.cursor() as cur:
                     conditions = ["agent_id = %s", "user_id = %s"]
                     params = [agent_id, user_id]
@@ -568,6 +579,8 @@ class EntryService:
         """
 
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 results = []
                 # 批量执行
@@ -603,6 +616,8 @@ class EntryService:
         results = {}
 
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 for update_data in updates:
                     entry_id = update_data.get("entry_id")
@@ -678,6 +693,8 @@ class EntryService:
             return {}
 
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 placeholders = ', '.join(['%s'] * len(entry_ids))
 
@@ -724,8 +741,8 @@ class EntryService:
     def get_section_entries(
         self,
         section_id: str,
-        agent_id: Optional[str] = None,
         user_id: str,  # V3.0: 必需
+        agent_id: Optional[str] = None,
         agent_type: Optional[str] = None,
         agent_instance_id: Optional[str] = None,
         only_latest: bool = True
@@ -745,6 +762,8 @@ class EntryService:
         """
         try:
             with connection_scope() as conn:
+                # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+                self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
                 with conn.cursor() as cur:
                     conditions = ["section_id = %s", "user_id = %s"]
                     params = [section_id, user_id]

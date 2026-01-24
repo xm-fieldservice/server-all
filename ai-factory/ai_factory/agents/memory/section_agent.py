@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class SectionDecision(str, Enum):
@@ -255,7 +258,7 @@ class SectionAgent:
             )
             
         except Exception as e:
-            print(f"[SectionAgent] LLM 分析失败: {e}")
+            logger.error(f"LLM 分析失败: {e}")
             # 降级到规则判断
             return self._analyze_with_rules(messages, current_section_id)
     
@@ -469,7 +472,7 @@ Agent1 的切分建议：
             )
             
         except Exception as e:
-            print(f"[SectionAgent] LLM 复核失败: {e}")
+            logger.error(f"LLM 复核失败: {e}")
             # 降级到规则复核
             return self._review_with_rules(proposal)
     

@@ -12,6 +12,11 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 import re
+import logging
+
+from ai_factory.db.pgvector_client import connection_scope
+
+logger = logging.getLogger(__name__)
 
 from .session_service import SessionService
 from .section_service import SectionService
@@ -65,7 +70,7 @@ class TokenCalculator:
                 # 使用 cl100k_base 编码器（适用于 GPT-3.5, GPT-4 等）
                 self._tokenizer = tiktoken.get_encoding("cl100k_base")
             except Exception as e:
-                print(f"[TokenCalculator] Warning: Failed to initialize tiktoken: {e}")
+                logger.warning(f"Failed to initialize tiktoken: {e}")
                 self._tokenizer = None
         else:
             self._tokenizer = None
@@ -87,7 +92,7 @@ class TokenCalculator:
                 tokens = self._tokenizer.encode(text)
                 return len(tokens)
             except Exception as e:
-                print(f"[TokenCalculator] Warning: Failed to count tokens with tiktoken: {e}")
+                logger.warning(f"Failed to count tokens with tiktoken: {e}")
 
         # 降级方案：按字符数粗略估算（中文 1 字符 ≈ 0.7 token，英文 1 词 ≈ 1.3 token）
         # 使用简化公式：token 数 ≈ 字符数 / 3
@@ -341,105 +346,118 @@ class MemoryService:
         Returns:
             ContextForTurn: 上下文对象
         """
-        # 1. 获取静态提示词（简化版）
-        system_prompt = self._get_static_prompt(agent_id)
+        # 0. 单连接事务穿透，避免 RLS 上下文丢失
+        with connection_scope() as conn:
+            self.section_service.set_rls_context(
+                user_id=user_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id,
+                conn=conn,
+            )
 
-        # 2. 获取短期记忆（最近消息）- V3.0: 传递user_id进行隔离
-        recent_messages = self.session_service.get_recent_messages(
-            session_id=session_id,
-            limit=recent_messages_limit,
-            user_id=user_id  # V3.0
-        )
-        # 转换为字典列表
-        history_messages = [
-            {
-                "message_id": msg.message_id,
-                "role": msg.role,
-                "content": msg.content,
-                "created_at": msg.created_at.isoformat() if msg.created_at else None,
-                "user_id": msg.user_id,  # V3.0
-                "agent_type": msg.agent_type,  # V3.0
-                "agent_instance_id": msg.agent_instance_id  # V3.0
-            }
-            for msg in recent_messages
-        ]
+            # 1. 获取静态提示词（简化版）
+            system_prompt = self._get_static_prompt(agent_id)
 
-        # 3. 获取长期记忆（从entries大库）- V3.0: 传递四层隔离参数
-        rag_snippets = []
-        if rag_top_k > 0:
-            # 使用智能查询提取器
-            query_text = self.query_extractor.extract_from_messages(recent_messages)
-            if query_text:
-                try:
-                    # 生成查询embedding
-                    query_embedding = self.llm_client.generate_embedding_sync(query_text)
-                    # V3.0: 使用四层隔离参数构建过滤器
-                    filters = {"agent_id": agent_id, "user_id": user_id}
-                    if agent_type:
-                        filters["agent_type"] = agent_type
-                    if agent_instance_id:
-                        filters["agent_instance_id"] = agent_instance_id
-                    # 检索相关条目
-                    rag_results = self.entry_service.search_similar(
-                        query_embedding=query_embedding,
-                        filters=filters,
-                        top_k=rag_top_k
-                    )
-                    # 转换为字典列表
-                    rag_snippets = [
-                        {
-                            "entry_id": result.get("entry_id"),
-                            "title": result.get("title"),
-                            "content": result.get("content"),
-                            "similarity": result.get("similarity") if result.get("similarity") is not None else None,
-                            "scene_tags": result.get("scene_tags"),
-                        }
-                        for result in rag_results
-                    ]
-                except Exception as e:
-                    print(f"[MemoryService] Warning: Failed to retrieve RAG snippets: {e}")
+            # 2. 获取短期记忆（最近消息）- 在同一连接内设置 RLS 后查询
+            recent_messages = self.session_service.get_recent_messages(
+                session_id=session_id,
+                limit=recent_messages_limit,
+                user_id=user_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id,
+                conn=conn,
+            )
+            # 转换为字典列表
+            history_messages = [
+                {
+                    "message_id": msg.message_id,
+                    "role": msg.role,
+                    "content": msg.content,
+                    "created_at": msg.created_at.isoformat() if msg.created_at else None,
+                    "user_id": msg.user_id,  # V3.0
+                    "agent_type": msg.agent_type,  # V3.0
+                    "agent_instance_id": msg.agent_instance_id  # V3.0
+                }
+                for msg in recent_messages
+            ]
 
-        # 4. 计算 token 预算
-        # system_prompt 占用 tokens
-        system_tokens = self.token_calculator.count_tokens(system_prompt)
+            # 3. 获取长期记忆（从entries大库）- V3.0: 传递四层隔离参数
+            rag_snippets = []
+            if rag_top_k > 0:
+                # 使用智能查询提取器
+                query_text = self.query_extractor.extract_from_messages(recent_messages)
+                if query_text:
+                    try:
+                        # 生成查询embedding
+                        query_embedding = self.llm_client.generate_embedding_sync(query_text)
+                        # V3.0: 使用四层隔离参数构建过滤器
+                        filters = {"agent_id": agent_id, "user_id": user_id}
+                        if agent_type:
+                            filters["agent_type"] = agent_type
+                        if agent_instance_id:
+                            filters["agent_instance_id"] = agent_instance_id
+                        # 检索相关条目
+                        rag_results = self.entry_service.search_similar(
+                            query_embedding=query_embedding,
+                            user_id=user_id,
+                            filters=filters,
+                            top_k=rag_top_k
+                        )
+                        # 转换为字典列表
+                        rag_snippets = [
+                            {
+                                "entry_id": result.get("entry_id"),
+                                "title": result.get("title"),
+                                "content": result.get("content"),
+                                "similarity": result.get("similarity") if result.get("similarity") is not None else None,
+                                "scene_tags": result.get("scene_tags"),
+                            }
+                            for result in rag_results
+                        ]
+                    except Exception as e:
+                        logger.warning(f"Failed to retrieve RAG snippets: {e}")
 
-        # 5. 按权重和 token 预算截断上下文
-        # RAG 片段优先级较高（权重 1.5）
-        # 历史消息优先级较低（权重 1.0）
-        remaining_tokens = max_tokens - system_tokens
+            # 4. 计算 token 预算
+            # system_prompt 占用 tokens
+            system_tokens = self.token_calculator.count_tokens(system_prompt)
 
-        # 先截断 RAG 片段
-        selected_rag_snippets = self._truncate_rag_snippets(rag_snippets, remaining_tokens * 0.4)
+            # 5. 按权重和 token 预算截断上下文
+            # RAG 片段优先级较高（权重 1.5）
+            # 历史消息优先级较低（权重 1.0）
+            remaining_tokens = max_tokens - system_tokens
 
-        # 再截断历史消息
-        rag_tokens = sum(
-            self.token_calculator.count_tokens(snippet.get("content", "")) +
-            self.token_calculator.count_tokens(snippet.get("title", ""))
-            for snippet in selected_rag_snippets
-        )
-        remaining_tokens -= rag_tokens
-        selected_history_messages = self._truncate_history_messages(history_messages, remaining_tokens)
+            # 先截断 RAG 片段
+            selected_rag_snippets = self._truncate_rag_snippets(rag_snippets, remaining_tokens * 0.4)
 
-        # 6. 组装上下文
-        return ContextForTurn(
-            system_prompt=system_prompt,
-            history_messages=selected_history_messages,
-            rag_snippets=selected_rag_snippets,
-            metadata={
-                "token_budget": max_tokens,
-                "system_tokens": system_tokens,
-                "rag_tokens": rag_tokens,
-                "history_tokens": self.token_calculator.count_messages_tokens(selected_history_messages),
-                "recent_messages_count": len(history_messages),
-                "selected_messages_count": len(selected_history_messages),
-                "rag_snippets_count": len(rag_snippets),
-                "selected_rag_count": len(selected_rag_snippets),
-                "generated_at": datetime.now().isoformat(),
-                "user_id": user_id,  # V3.0
-                "agent_type": agent_type,  # V3.0
-                "agent_instance_id": agent_instance_id  # V3.0
-            }
-        )
+            # 再截断历史消息
+            rag_tokens = sum(
+                self.token_calculator.count_tokens(snippet.get("content", "")) +
+                self.token_calculator.count_tokens(snippet.get("title", ""))
+                for snippet in selected_rag_snippets
+            )
+            remaining_tokens -= rag_tokens
+            selected_history_messages = self._truncate_history_messages(history_messages, remaining_tokens)
+
+            # 6. 组装上下文
+            return ContextForTurn(
+                system_prompt=system_prompt,
+                history_messages=selected_history_messages,
+                rag_snippets=selected_rag_snippets,
+                metadata={
+                    "token_budget": max_tokens,
+                    "system_tokens": system_tokens,
+                    "rag_tokens": rag_tokens,
+                    "history_tokens": self.token_calculator.count_messages_tokens(selected_history_messages),
+                    "recent_messages_count": len(history_messages),
+                    "selected_messages_count": len(selected_history_messages),
+                    "rag_snippets_count": len(rag_snippets),
+                    "selected_rag_count": len(selected_rag_snippets),
+                    "generated_at": datetime.now().isoformat(),
+                    "user_id": user_id,  # V3.0
+                    "agent_type": agent_type,  # V3.0
+                    "agent_instance_id": agent_instance_id  # V3.0
+                }
+            )
 
     def remember_explicitly(
         self,
@@ -465,56 +483,82 @@ class MemoryService:
         Returns:
             str: entry_id
         """
-        # V3.0: 在metadata中添加agent_type和agent_instance_id（如果未在extra_meta中指定）
-        if extra_meta is None:
-            extra_meta = {}
-        metadata = extra_meta.copy()
-        if agent_type and "agent_type" not in metadata:
-            metadata["agent_type"] = agent_type
-        if agent_instance_id and "agent_instance_id" not in metadata:
-            metadata["agent_instance_id"] = agent_instance_id
-
-        # 构造记忆候选
-        candidate = MemoryCandidate(
-            content=content,
+        # 0. 设置 RLS 上下文
+        self.section_service.set_rls_context(
             user_id=user_id,
-            agent_id=agent_id,
-            agent_type=agent_type,  # V3.0
-            agent_instance_id=agent_instance_id,  # V3.0
-            scene_tags=extra_meta.get("scene_tags", {}) if extra_meta else {},
-            space_type=extra_meta.get("space_type", "note") if extra_meta else "note",
-            metadata=metadata
+            agent_type=agent_type,
+            agent_instance_id=agent_instance_id
         )
+        try:
+            # V3.0: 在metadata中添加agent_type和agent_instance_id（如果未在extra_meta中指定）
+            if extra_meta is None:
+                extra_meta = {}
+            metadata = extra_meta.copy()
+            if agent_type and "agent_type" not in metadata:
+                metadata["agent_type"] = agent_type
+            if agent_instance_id and "agent_instance_id" not in metadata:
+                metadata["agent_instance_id"] = agent_instance_id
 
-        # 调用 Memory0Service 进行记忆治理
-        result = self.memory0_service.upsert_memory(candidate)
+            # 构造记忆候选
+            candidate = MemoryCandidate(
+                content=content,
+                user_id=user_id,
+                agent_id=agent_id,
+                agent_type=agent_type,  # V3.0
+                agent_instance_id=agent_instance_id,  # V3.0
+                scene_tags=extra_meta.get("scene_tags", {}) if extra_meta else {},
+                space_type=extra_meta.get("space_type", "note") if extra_meta else "note",
+                metadata=metadata
+            )
 
-        return result.entry_id
+            # 调用 Memory0Service 进行记忆治理
+            result = self.memory0_service.upsert_memory(candidate)
+
+            return result.entry_id
+        finally:
+            self.section_service.clear_rls_context()
 
     def append_message(
         self,
         session_id: str,
         role: str,
         content: str,
+        user_id: str,  # V3.1.2: 补齐 RLS 上下文
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
-        """添加消息到会话。
+        """添加消息到会话（V3.1.2: 补齐 RLS 上下文）。
 
         Args:
             session_id: 会话ID
             role: 消息角色（user/assistant/system/tool）
             content: 消息内容
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
             metadata: 元数据
 
         Returns:
             str: message_id
         """
-        return self.session_service.append_message(
-            session_id=session_id,
-            role=role,
-            content=content,
-            metadata=metadata
-        )
+        with connection_scope() as conn:
+            self.section_service.set_rls_context(
+                user_id=user_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id,
+                conn=conn,
+            )
+            return self.session_service.append_message(
+                session_id=session_id,
+                role=role,
+                content=content,
+                user_id=user_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id,
+                metadata=metadata,
+                conn=conn,
+            )
 
     def summarize_section(
         self,
@@ -540,27 +584,37 @@ class MemoryService:
         Returns:
             Dict[str, Any]: 整理结果
         """
-        summary = self.section_service.summarize_section(
-            session_id=session_id,
-            agent_id=agent_id,
-            user_id=user_id,  # V3.0
-            agent_type=agent_type,  # V3.0
-            agent_instance_id=agent_instance_id,  # V3.0
-            trigger_type=trigger_type,
-            manual_section_title=manual_section_title
-        )
+        if user_id:
+            self.section_service.set_rls_context(
+                user_id=user_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id
+            )
+        try:
+            summary = self.section_service.summarize_section(
+                session_id=session_id,
+                agent_id=agent_id,
+                user_id=user_id,  # V3.0
+                agent_type=agent_type,  # V3.0
+                agent_instance_id=agent_instance_id,  # V3.0
+                trigger_type=trigger_type,
+                manual_section_title=manual_section_title
+            )
 
-        return {
-            "section_id": summary.section_id,
-            "entry_id": summary.entry_id,
-            "section_version": summary.section_version,
-            "scene_tags": summary.scene_tags,
-            "agent_id": summary.agent_id,
-            "metadata": summary.metadata,
-            "user_id": user_id,  # V3.0
-            "agent_type": agent_type,  # V3.0
-            "agent_instance_id": agent_instance_id  # V3.0
-        }
+            return {
+                "section_id": summary.section_id,
+                "entry_id": summary.entry_id,
+                "section_version": summary.section_version,
+                "scene_tags": summary.scene_tags,
+                "agent_id": summary.agent_id,
+                "metadata": summary.metadata,
+                "user_id": user_id,  # V3.0
+                "agent_type": agent_type,  # V3.0
+                "agent_instance_id": agent_instance_id  # V3.0
+            }
+        finally:
+            if user_id:
+                self.section_service.clear_rls_context()
 
     def _get_static_prompt(self, agent_id: str) -> str:
         """获取静态提示词（简化版）。

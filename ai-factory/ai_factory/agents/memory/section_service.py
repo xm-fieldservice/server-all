@@ -83,16 +83,33 @@ class SectionService:
     def set_rls_context(
         self,
         user_id: str,
-        agent_type: Optional[str] = None
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None,
+        conn = None
     ) -> None:
         """设置RLS上下文（V3新增）
 
         Args:
             user_id: 用户ID
             agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
+            conn: 数据库连接（可选）
         """
         try:
-            with connection_scope() as conn:
+            if conn is None:
+                with connection_scope() as conn:
+                    with conn.cursor() as cur:
+                        # 设置用户ID（必需）
+                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
+
+                        # 设置Agent类型（可选）
+                        if agent_type:
+                            cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+                        
+                        # 设置Agent实例ID（可选）
+                        if agent_instance_id:
+                            cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+            else:
                 with conn.cursor() as cur:
                     # 设置用户ID（必需）
                     cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
@@ -100,19 +117,31 @@ class SectionService:
                     # 设置Agent类型（可选）
                     if agent_type:
                         cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+                    
+                    # 设置Agent实例ID（可选）
+                    if agent_instance_id:
+                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
 
-                    logger.debug(f"RLS context set: user_id={user_id}, agent_type={agent_type}")
+            logger.debug(f"RLS context set: user_id={user_id}, agent_type={agent_type}, agent_instance_id={agent_instance_id}")
         except Exception as e:
             logger.error(f"Failed to set RLS context: {e}")
             raise
 
-    def clear_rls_context(self) -> None:
-        """清除RLS上下文（V3新增）"""
+    def clear_rls_context(self, conn=None) -> None:
+        """清除RLS上下文（V3新增）
+
+        Args:
+            conn: 数据库连接（可选）
+        """
         try:
-            with connection_scope() as conn:
+            if conn is None:
+                with connection_scope() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("RESET ALL")
+            else:
                 with conn.cursor() as cur:
                     cur.execute("RESET ALL")
-                    logger.debug("RLS context cleared")
+            logger.debug("RLS context cleared")
         except Exception as e:
             logger.error(f"Failed to clear RLS context: {e}")
             raise
@@ -188,89 +217,97 @@ class SectionService:
         Returns:
             SectionSummary: 整理结果
         """
-        # 1. 获取会话的最近消息
-        messages = self._get_session_messages(session_id, limit=50)
-
-        if not messages:
-            raise ValueError(f"Session {session_id} has no messages to summarize")
-
-        # 2. 如果没有手动指定section_id，生成新的
-        if section_id is None:
-            section_id = f"sec_{uuid.uuid4().hex[:16]}"
-            section_title = manual_section_title or self._generate_section_title(messages)
-        else:
-            section_title = manual_section_title or f"Section {section_id}"
-
-        # 3. 调用LLM进行整理总结
-        summary_content = self._summarize_with_llm(messages, section_title)
-
-        # 4. 生成scene_tags
-        scene_tags = self._generate_scene_tags(summary_content, agent_id)
-
-        # 5. 获取当前section的版本号
-        section_version = self._get_next_section_version(section_id)
-
-        # 6. 将旧版本标记为非最新
-        self._mark_old_versions_as_not_latest(section_id)
-
-        # 7. 写入entries表（通过EntryService，V3升级：传递四层隔离参数）
         if user_id is None:
             raise ValueError("user_id is required for creating entry")
 
-        entry_id = self.entry_service.create_entry({
-            "entry_id": f"ent_{uuid.uuid4().hex}",
-            "title": section_title,
-            "content": summary_content,
-            "scene_tags": scene_tags,
-            "section_id": section_id,
-            "section_version": section_version,
-            "is_latest": True,
-            "agent_id": agent_id,
-            "source_session_id": session_id,
-            "space_type": "note",  # 默认为笔记类型
-        }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
+        with connection_scope() as conn:
+            # 0. 设置 RLS 上下文 (V3.1.2 加固)
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            
+            try:
+                # 1. 获取会话的最近消息
+                messages = self._get_session_messages(session_id, limit=50, conn=conn)
 
-        # 8. 生成embedding并写入entry_embeddings表
-        try:
-            embedding = self.llm_client.generate_embedding_sync(summary_content)
-            self.vector_client.upsert_embedding(entry_id, embedding)
-        except Exception as e:
-            # embedding生成失败不影响主流程
-            print(f"[SectionService] Warning: Failed to generate embedding for {entry_id}: {e}")
+                if not messages:
+                    raise ValueError(f"Session {session_id} has no messages to summarize")
 
-        # 9. 创建或更新section记录（V3升级：包含四层隔离字段）
-        self._create_or_update_section(
-            section_id=section_id,
-            session_id=session_id,
-            title=section_title,
-            status="completed",
-            trigger_type=trigger_type,
-            message_count=len(messages),
-            summary_content=summary_content,
-            summary_entry_id=entry_id,
-            agent_id=agent_id,
-            user_id=user_id,  # V3新增
-            agent_type=agent_type,  # V3新增
-            agent_instance_id=agent_instance_id  # V3新增
-        )
+                # 2. 如果没有手动指定section_id，生成新的
+                if section_id is None:
+                    section_id = f"sec_{uuid.uuid4().hex[:16]}"
+                    section_title = manual_section_title or self._generate_section_title(messages)
+                else:
+                    section_title = manual_section_title or f"Section {section_id}"
 
-        # 10. 提交 Memory0 任务（如果启用异步处理）
-        if self.enable_async_memory0:
-            self._enqueue_memory0_task(entry_id, agent_id)
+                # 3. 调用LLM进行整理总结
+                summary_content = self._summarize_with_llm(messages, section_title)
 
-        return SectionSummary(
-            section_id=section_id,
-            entry_id=entry_id,
-            section_version=section_version,
-            content=summary_content,
-            scene_tags=scene_tags,
-            agent_id=agent_id,
-            metadata={
-                "trigger_type": trigger_type,
-                "message_count": len(messages),
-                "section_title": section_title
-            }
-        )
+                # 4. 生成scene_tags
+                scene_tags = self._generate_scene_tags(summary_content, agent_id)
+
+                # 5. 获取当前section的版本号
+                section_version = self._get_next_section_version(section_id, conn=conn)
+
+                # 6. 将旧版本标记为非最新
+                self._mark_old_versions_as_not_latest(section_id, conn=conn)
+
+                # 7. 写入entries表（通过EntryService，V3升级：传递四层隔离参数）
+                entry_id = self.entry_service.create_entry({
+                    "entry_id": f"ent_{uuid.uuid4().hex}",
+                    "title": section_title,
+                    "content": summary_content,
+                    "scene_tags": scene_tags,
+                    "section_id": section_id,
+                    "section_version": section_version,
+                    "is_latest": True,
+                    "agent_id": agent_id,
+                    "source_session_id": session_id,
+                    "space_type": "note",  # 默认为笔记类型
+                }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
+
+                # 8. 生成embedding并写入entry_embeddings表
+                try:
+                    embedding = self.llm_client.generate_embedding_sync(summary_content)
+                    self.vector_client.upsert_embedding(entry_id, embedding)
+                except Exception as e:
+                    # embedding生成失败不影响主流程
+                    logger.warning(f"Failed to generate embedding for {entry_id}: {e}")
+
+                # 9. 创建或更新section记录（V3升级：包含四层隔离字段）
+                self._create_or_update_section(
+                    section_id=section_id,
+                    session_id=session_id,
+                    title=section_title,
+                    status="completed",
+                    trigger_type=trigger_type,
+                    message_count=len(messages),
+                    summary_content=summary_content,
+                    summary_entry_id=entry_id,
+                    agent_id=agent_id,
+                    user_id=user_id,  # V3新增
+                    agent_type=agent_type,  # V3新增
+                    agent_instance_id=agent_instance_id,  # V3新增
+                    conn=conn
+                )
+
+                # 10. 提交 Memory0 任务（如果启用异步处理）
+                if self.enable_async_memory0:
+                    self._enqueue_memory0_task(entry_id, agent_id)
+
+                return SectionSummary(
+                    section_id=section_id,
+                    entry_id=entry_id,
+                    section_version=section_version,
+                    content=summary_content,
+                    scene_tags=scene_tags,
+                    agent_id=agent_id,
+                    metadata={
+                        "trigger_type": trigger_type,
+                        "message_count": len(messages),
+                        "section_title": section_title
+                    }
+                )
+            finally:
+                self.clear_rls_context(conn=conn)
 
     def check_and_trigger_section(
         self,
@@ -301,66 +338,76 @@ class SectionService:
         - 冷却时间窗：触发后会有一段时间的冷却期（默认5分钟），防止重复触发
         - 异步处理：如果启用异步整理，则入队任务而非同步执行
         """
-        # 1. 检查冷却时间窗
-        last_triggered_at = self._get_last_section_triggered_at(session_id)
-        if last_triggered_at:
-            now = datetime.now(last_triggered_at.tzinfo) if last_triggered_at.tzinfo else datetime.now()
-            time_since_trigger = (now - last_triggered_at).total_seconds()
-            if time_since_trigger < self.section_trigger_cooldown:
-                print(f"[SectionService] Cooldown active: {time_since_trigger}s < {self.section_trigger_cooldown}s, skipping trigger check")
-                return None
+        if user_id is None:
+            raise ValueError("user_id is required for check_and_trigger_section")
 
-        # 2. 获取会话的消息总数和上次整理时间
-        message_count = self._get_session_message_count(session_id)
-        last_section_time = self._get_last_section_time(session_id)
+        with connection_scope() as conn:
+            # 设置 RLS 上下文
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            
+            try:
+                # 1. 检查冷却时间窗
+                last_triggered_at = self._get_last_section_triggered_at(session_id, conn=conn, user_id=user_id)
+                if last_triggered_at:
+                    now = datetime.now(last_triggered_at.tzinfo) if last_triggered_at.tzinfo else datetime.now()
+                    time_since_trigger = (now - last_triggered_at).total_seconds()
+                    if time_since_trigger < self.section_trigger_cooldown:
+                        logger.debug(f"Cooldown active: {time_since_trigger}s < {self.section_trigger_cooldown}s, skipping trigger check")
+                        return None
 
-        # 3. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
-        trigger_type = None
-        if message_count >= self.section_trigger_message_count:
-            if last_section_time:
-                # 获取上次整理时间之后新增的消息数
-                new_message_count = self._get_session_message_count_since(session_id, last_section_time)
-                if new_message_count >= self.section_trigger_message_count:
-                    print(f"[SectionService] Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
+                # 2. 获取会话的消息总数和上次整理时间
+                message_count = self._get_session_message_count(session_id, conn=conn, user_id=user_id)
+                last_section_time = self._get_last_section_time(session_id, conn=conn, user_id=user_id)
+
+                # 3. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
+                trigger_type = None
+                if message_count >= self.section_trigger_message_count:
+                    if last_section_time:
+                        # 获取上次整理时间之后新增的消息数
+                        new_message_count = self._get_session_message_count_since(session_id, last_section_time, conn=conn, user_id=user_id)
+                        if new_message_count >= self.section_trigger_message_count:
+                            logger.info(f"Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
+                            trigger_type = SectionTrigger.AUTO.value
+                    else:
+                        # 首次整理：直接检查消息总数
+                        logger.info(f"Message count trigger (first time): {message_count} messages >= {self.section_trigger_message_count}")
+                        trigger_type = SectionTrigger.AUTO.value
+
+                # 4. 检查时间间隔触发
+                if not trigger_type and last_section_time:
+                    # 处理时区问题：确保 datetime.now() 和 last_section_time 有相同的时区信息
+                    now = datetime.now(last_section_time.tzinfo) if last_section_time.tzinfo else datetime.now()
+                    time_since_last = (now - last_section_time).total_seconds()
+                    if time_since_last >= self.section_trigger_time_interval:
+                        logger.info(f"Time interval trigger: {time_since_last}s >= {self.section_trigger_time_interval}s")
+                        trigger_type = SectionTrigger.TIMEOUT.value
+
+                # 5. 检查语义触发（如果有用户消息）
+                if not trigger_type and user_message and self._check_semantic_trigger(user_message):
+                    logger.info(f"Semantic trigger detected in message: {user_message[:50]}...")
                     trigger_type = SectionTrigger.AUTO.value
-            else:
-                # 首次整理：直接检查消息总数
-                print(f"[SectionService] Message count trigger (first time): {message_count} messages >= {self.section_trigger_message_count}")
-                trigger_type = SectionTrigger.AUTO.value
 
-        # 4. 检查时间间隔触发
-        if not trigger_type and last_section_time:
-            # 处理时区问题：确保 datetime.now() 和 last_section_time 有相同的时区信息
-            now = datetime.now(last_section_time.tzinfo) if last_section_time.tzinfo else datetime.now()
-            time_since_last = (now - last_section_time).total_seconds()
-            if time_since_last >= self.section_trigger_time_interval:
-                print(f"[SectionService] Time interval trigger: {time_since_last}s >= {self.section_trigger_time_interval}s")
-                trigger_type = SectionTrigger.TIMEOUT.value
+                # 6. 如果满足触发条件，执行整理
+                if trigger_type:
+                    # 更新触发时间（用于冷却时间窗）
+                    self._update_last_section_triggered_at(session_id, conn=conn, user_id=user_id)
 
-        # 5. 检查语义触发（如果有用户消息）
-        if not trigger_type and user_message and self._check_semantic_trigger(user_message):
-            print(f"[SectionService] Semantic trigger detected in message: {user_message[:50]}...")
-            trigger_type = SectionTrigger.AUTO.value
-
-        # 6. 如果满足触发条件，执行整理
-        if trigger_type:
-            # 更新触发时间（用于冷却时间窗）
-            self._update_last_section_triggered_at(session_id)
-
-            # 如果启用异步整理，则入队任务
-            if self.enable_async_section_summarize:
-                self._enqueue_section_summarize_task(session_id, agent_id, agent_type, agent_instance_id, user_id, trigger_type)
-                return None  # 异步处理，不返回结果
-            else:
-                # 同步执行整理（V3升级：传递四层隔离字段）
-                return self.summarize_section(
-                    session_id=session_id,
-                    agent_id=agent_id,
-                    agent_type=agent_type,  # V3新增
-                    agent_instance_id=agent_instance_id,  # V3新增
-                    user_id=user_id,  # V3新增
-                    trigger_type=trigger_type
-                )
+                    # 如果启用异步整理，则入队任务
+                    if self.enable_async_section_summarize:
+                        self._enqueue_section_summarize_task(session_id, agent_id, agent_type, agent_instance_id, user_id, trigger_type)
+                        return None  # 异步处理，不返回结果
+                    else:
+                        # 同步执行整理（V3升级：传递四层隔离字段）
+                        return self.summarize_section(
+                            session_id=session_id,
+                            agent_id=agent_id,
+                            agent_type=agent_type,  # V3新增
+                            agent_instance_id=agent_instance_id,  # V3新增
+                            user_id=user_id,  # V3新增
+                            trigger_type=trigger_type
+                        )
+            finally:
+                self.clear_rls_context(conn=conn)
 
         # 没有触发条件满足
         return None
@@ -386,52 +433,58 @@ class SectionService:
             List[Dict[str, Any]]: 版本历史列表
         """
         with connection_scope() as conn:
-            with conn.cursor() as cur:
-                conditions = ["section_id = %s"]
-                params = [section_id]
+            if user_id:
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            try:
+                with conn.cursor() as cur:
+                    conditions = ["section_id = %s"]
+                    params = [section_id]
 
-                if agent_id:
-                    conditions.append("agent_id = %s")
-                    params.append(agent_id)
+                    if agent_id:
+                        conditions.append("agent_id = %s")
+                        params.append(agent_id)
 
-                # V3新增：四层隔离过滤
+                    # V3新增：四层隔离过滤
+                    if user_id:
+                        conditions.append("user_id = %s")
+                        params.append(user_id)
+
+                    if agent_type:
+                        conditions.append("agent_type = %s")
+                        params.append(agent_type)
+
+                    if agent_instance_id:
+                        conditions.append("agent_instance_id = %s")
+                        params.append(agent_instance_id)
+
+                    cur.execute(f"""
+                        SELECT entry_id, section_id, section_version, is_latest,
+                               content, scene_tags, agent_id, user_id, agent_type, agent_instance_id, created_at
+                        FROM entries
+                        WHERE {" AND ".join(conditions)}
+                        ORDER BY section_version DESC
+                    """, params)
+
+                    rows = cur.fetchall()
+                    return [
+                        {
+                            "entry_id": row[0],
+                            "section_id": row[1],
+                            "section_version": row[2],
+                            "is_latest": row[3],
+                            "content": row[4],
+                            "scene_tags": json.loads(row[5]) if row[5] else {},
+                            "agent_id": row[6],
+                            "user_id": row[7],  # V3新增
+                            "agent_type": row[8],  # V3新增
+                            "agent_instance_id": row[9],  # V3新增
+                            "created_at": row[10]
+                        }
+                        for row in rows
+                    ]
+            finally:
                 if user_id:
-                    conditions.append("user_id = %s")
-                    params.append(user_id)
-
-                if agent_type:
-                    conditions.append("agent_type = %s")
-                    params.append(agent_type)
-
-                if agent_instance_id:
-                    conditions.append("agent_instance_id = %s")
-                    params.append(agent_instance_id)
-
-                cur.execute(f"""
-                    SELECT entry_id, section_id, section_version, is_latest,
-                           content, scene_tags, agent_id, user_id, agent_type, agent_instance_id, created_at
-                    FROM entries
-                    WHERE {" AND ".join(conditions)}
-                    ORDER BY section_version DESC
-                """, params)
-
-                rows = cur.fetchall()
-                return [
-                    {
-                        "entry_id": row[0],
-                        "section_id": row[1],
-                        "section_version": row[2],
-                        "is_latest": row[3],
-                        "content": row[4],
-                        "scene_tags": json.loads(row[5]) if row[5] else {},
-                        "agent_id": row[6],
-                        "user_id": row[7],  # V3新增
-                        "agent_type": row[8],  # V3新增
-                        "agent_instance_id": row[9],  # V3新增
-                        "created_at": row[10]
-                    }
-                    for row in rows
-                ]
+                    self.clear_rls_context(conn=conn)
 
     def merge_sections(
         self,
@@ -455,126 +508,152 @@ class SectionService:
         Returns:
             SectionSummary: 合并后的section总结
         """
-        # 1. 获取所有源section的最新版本
-        all_content = []
-        for sec_id in source_section_ids:
-            history = self.get_section_history(sec_id, agent_id)
-            if history:
-                all_content.append(history[0]["content"])
-
-        if not all_content:
-            raise ValueError(f"No content found in source sections: {source_section_ids}")
-
-        # 2. 合并内容
-        merged_content = self._merge_content_with_llm(all_content, target_section_id)
-
-        # 3. 生成scene_tags
-        scene_tags = self._generate_scene_tags(merged_content, agent_id)
-
-        # 4. 获取目标section的版本号
-        section_version = self._get_next_section_version(target_section_id)
-
-        # 5. 将旧版本标记为非最新
-        self._mark_old_versions_as_not_latest(target_section_id)
-
-        # 6. 写入entries表（V3升级：传递四层隔离参数）
         if user_id is None:
-            raise ValueError("user_id is required for creating entry")
+            raise ValueError("user_id is required for merging sections")
 
-        entry_id = self.entry_service.create_entry({
-            "entry_id": f"ent_{uuid.uuid4().hex}",
-            "title": f"Merged Section {target_section_id}",
-            "content": merged_content,
-            "scene_tags": scene_tags,
-            "section_id": target_section_id,
-            "section_version": section_version,
-            "is_latest": True,
-            "agent_id": agent_id,
-            "space_type": "note",
-        }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
+        with connection_scope() as conn:
+            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            try:
+                # 1. 获取所有源section的最新版本
+                all_content = []
+                for sec_id in source_section_ids:
+                    history = self.get_section_history(sec_id, agent_id, agent_type, agent_instance_id, user_id)
+                    if history:
+                        all_content.append(history[0]["content"])
 
-        # 7. 生成embedding
-        try:
-            embedding = self.llm_client.generate_embedding_sync(merged_content)
-            self.vector_client.upsert_embedding(entry_id, embedding)
-        except Exception as e:
-            print(f"[SectionService] Warning: Failed to generate embedding for {entry_id}: {e}")
+                if not all_content:
+                    raise ValueError(f"No content found in source sections: {source_section_ids}")
 
-        # 8. 提交 Memory0 任务（如果启用异步处理）
-        if self.enable_async_memory0:
-            self._enqueue_memory0_task(entry_id, agent_id)
- 
-        return SectionSummary(
-            section_id=target_section_id,
-            entry_id=entry_id,
-            section_version=section_version,
-            content=merged_content,
-            scene_tags=scene_tags,
-            agent_id=agent_id,
-            metadata={
-                "operation": "merge",
-                "source_sections": source_section_ids,
-                "merged_at": datetime.now().isoformat()
-            }
-        )
+                # 2. 合并内容
+                merged_content = self._merge_content_with_llm(all_content, target_section_id)
 
-    def get_section_info(self, section_id: str) -> Optional[SectionInfo]:
+                # 3. 生成scene_tags
+                scene_tags = self._generate_scene_tags(merged_content, agent_id)
+
+                # 4. 获取目标section的版本号
+                section_version = self._get_next_section_version(target_section_id, conn=conn)
+
+                # 5. 将旧版本标记为非最新
+                self._mark_old_versions_as_not_latest(target_section_id, conn=conn)
+
+                # 6. 写入entries表（V3升级：传递四层隔离参数）
+                entry_id = self.entry_service.create_entry({
+                    "entry_id": f"ent_{uuid.uuid4().hex}",
+                    "title": f"Merged Section {target_section_id}",
+                    "content": merged_content,
+                    "scene_tags": scene_tags,
+                    "section_id": target_section_id,
+                    "section_version": section_version,
+                    "is_latest": True,
+                    "agent_id": agent_id,
+                    "space_type": "note",
+                }, user_id=user_id, agent_type=agent_type, agent_instance_id=agent_instance_id)
+
+                # 7. 生成embedding
+                try:
+                    embedding = self.llm_client.generate_embedding_sync(merged_content)
+                    self.vector_client.upsert_embedding(entry_id, embedding)
+                except Exception as e:
+                    logger.warning(f"Failed to generate embedding for {entry_id}: {e}")
+
+                # 8. 提交 Memory0 任务（如果启用异步处理）
+                if self.enable_async_memory0:
+                    self._enqueue_memory0_task(entry_id, agent_id)
+         
+                return SectionSummary(
+                    section_id=target_section_id,
+                    entry_id=entry_id,
+                    section_version=section_version,
+                    content=merged_content,
+                    scene_tags=scene_tags,
+                    agent_id=agent_id,
+                    metadata={
+                        "operation": "merge",
+                        "source_sections": source_section_ids,
+                        "merged_at": datetime.now().isoformat()
+                    }
+                )
+            finally:
+                self.clear_rls_context(conn=conn)
+
+    def get_section_info(
+        self,
+        section_id: str,
+        user_id: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
+    ) -> Optional[SectionInfo]:
         """获取section信息。
 
         Args:
             section_id: Section ID
+            user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选，用于RLS）
+            agent_instance_id: Agent实例ID（可选，用于RLS）
 
         Returns:
             SectionInfo: Section信息，如果不存在则返回None
         """
         with connection_scope() as conn:
-            with conn.cursor() as cur:
-                cur.execute("""
-                    SELECT section_id, session_id, title, status, trigger_type, message_count,
-                           summary_content, summary_entry_id, agent_id,
-                           user_id, agent_type, agent_instance_id,
-                           created_at, updated_at, completed_at
-                    FROM chat_sections
-                    WHERE section_id = %s
-                """, (section_id,))
+            if user_id:
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT section_id, session_id, title, status, trigger_type, message_count,
+                               summary_content, summary_entry_id, agent_id,
+                               user_id, agent_type, agent_instance_id,
+                               created_at, updated_at, completed_at
+                        FROM chat_sections
+                        WHERE section_id = %s
+                    """, (section_id,))
 
-                row = cur.fetchone()
-                if row:
-                    return SectionInfo(
-                        section_id=row[0],
-                        session_id=row[1],
-                        title=row[2],
-                        status=row[3],
-                        trigger_type=row[4],
-                        message_count=row[5],
-                        summary_content=row[6],
-                        summary_entry_id=row[7],
-                        agent_id=row[8],
-                        user_id=row[9],  # V3新增
-                        agent_type=row[10],  # V3新增
-                        agent_instance_id=row[11],  # V3新增
-                        created_at=row[12],
-                        updated_at=row[13],
-                        completed_at=row[14]
-                    )
+                    row = cur.fetchone()
+                    if row:
+                        return SectionInfo(
+                            section_id=row[0],
+                            session_id=row[1],
+                            title=row[2],
+                            status=row[3],
+                            trigger_type=row[4],
+                            message_count=row[5],
+                            summary_content=row[6],
+                            summary_entry_id=row[7],
+                            agent_id=row[8],
+                            user_id=row[9],  # V3新增
+                            agent_type=row[10],  # V3新增
+                            agent_instance_id=row[11],  # V3新增
+                            created_at=row[12],
+                            updated_at=row[13],
+                            completed_at=row[14]
+                        )
+            finally:
+                if user_id:
+                    self.clear_rls_context(conn=conn)
         return None
 
     def _get_session_messages(
         self,
         session_id: str,
-        limit: int = 50
+        limit: int = 50,
+        conn = None,
+        user_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取会话的消息。
 
         Args:
             session_id: 会话ID
             limit: 返回消息数量限制
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
 
         Returns:
             List[Dict[str, Any]]: 消息列表
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT message_id, role, msg_type, content, created_at
                     FROM chat_messages
@@ -594,6 +673,12 @@ class SectionService:
                     }
                     for row in rows
                 ]
+
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
 
     def _generate_section_title(
         self,
@@ -615,7 +700,7 @@ class SectionService:
             return self.llm_client.generate_section_title_sync(messages)
         except Exception as e:
             # LLM 调用失败，使用简化逻辑
-            print(f"[SectionService] Warning: Failed to generate title with LLM: {e}")
+            logger.warning(f"Failed to generate title with LLM: {e}")
             first_content = messages[0]["content"]
             return first_content[:50] + "..." if len(first_content) > 50 else first_content
 
@@ -638,7 +723,7 @@ class SectionService:
             return self.llm_client.summarize_messages_sync(messages, section_title)
         except Exception as e:
             # LLM 调用失败，使用简化逻辑
-            print(f"[SectionService] Warning: Failed to summarize with LLM: {e}")
+            logger.warning(f"Failed to summarize with LLM: {e}")
             summary_parts = [f"## {section_title}"]
             for msg in messages:
                 role_label = "用户" if msg['role'] == 'user' else "助手"
@@ -664,7 +749,7 @@ class SectionService:
             return self.llm_client.generate_scene_tags_sync(content, agent_id)
         except Exception as e:
             # LLM 调用失败，使用简化逻辑
-            print(f"[SectionService] Warning: Failed to generate tags with LLM: {e}")
+            logger.warning(f"Failed to generate tags with LLM: {e}")
             scene_tags = {
                 "execution": ["笔记"],
                 "planning": ["项目"]
@@ -678,17 +763,18 @@ class SectionService:
 
             return scene_tags
 
-    def _get_next_section_version(self, section_id: str) -> int:
+    def _get_next_section_version(self, section_id: str, conn=None) -> int:
         """获取section的下一个版本号。
 
         Args:
             section_id: Section ID
+            conn: 数据库连接（可选）
 
         Returns:
             int: 下一个版本号
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT COALESCE(MAX(section_version), 0)
                     FROM entries
@@ -698,19 +784,32 @@ class SectionService:
                 result = cur.fetchone()
                 return (result[0] if result else 0) + 1
 
-    def _mark_old_versions_as_not_latest(self, section_id: str) -> None:
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
+
+    def _mark_old_versions_as_not_latest(self, section_id: str, conn=None) -> None:
         """将section的旧版本标记为非最新。
 
         Args:
             section_id: Section ID
+            conn: 数据库连接（可选）
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            with connection.cursor() as cur:
                 cur.execute("""
                     UPDATE entries
                     SET is_latest = FALSE
                     WHERE section_id = %s AND is_latest = TRUE
                 """, (section_id,))
+
+        if conn:
+            execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                execute_query(conn)
 
     def _create_or_update_section(
         self,
@@ -725,7 +824,8 @@ class SectionService:
         agent_id: str,
         user_id: Optional[str] = None,  # V3新增
         agent_type: Optional[str] = None,  # V3新增
-        agent_instance_id: Optional[str] = None  # V3新增
+        agent_instance_id: Optional[str] = None,  # V3新增
+        conn=None
     ) -> None:
         """创建或更新section记录。
 
@@ -742,9 +842,12 @@ class SectionService:
             user_id: 用户ID（V3新增）
             agent_type: Agent类型（V3新增）
             agent_instance_id: Agent实例ID（V3新增）
+            conn: 数据库连接（可选）
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
+            with connection.cursor() as cur:
                 # 检查section是否存在
                 cur.execute("""
                     SELECT section_id FROM chat_sections
@@ -781,6 +884,12 @@ class SectionService:
                            user_id, agent_type, agent_instance_id,
                            status, "completed"))
 
+        if conn:
+            execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                execute_query(conn)
+
     def _merge_content_with_llm(
         self,
         contents: List[str],
@@ -800,7 +909,7 @@ class SectionService:
             return self.llm_client.merge_contents_sync(contents, target_section_id)
         except Exception as e:
             # LLM 调用失败，使用简化逻辑
-            print(f"[SectionService] Warning: Failed to merge with LLM: {e}")
+            logger.warning(f"Failed to merge with LLM: {e}")
             return "\n\n---\n\n".join(contents)
 
     def _enqueue_memory0_task(self, entry_id: str, agent_id: str) -> None:
@@ -818,22 +927,26 @@ class SectionService:
                 priority=0
             )
             self.task_queue.enqueue(task)
-            print(f"[SectionService] Memory0 task enqueued: {task.task_id} for entry {entry_id}")
+            logger.info(f"Memory0 task enqueued: {task.task_id} for entry {entry_id}")
         except Exception as e:
             # 任务提交失败不影响主流程
-            print(f"[SectionService] Warning: Failed to enqueue Memory0 task for {entry_id}: {e}")
+            logger.warning(f"Failed to enqueue Memory0 task for {entry_id}: {e}")
 
-    def _get_session_message_count(self, session_id: str) -> int:
+    def _get_session_message_count(self, session_id: str, conn=None, user_id=None) -> int:
         """获取会话的消息数量。
 
         Args:
             session_id: 会话ID
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
 
         Returns:
             int: 消息数量
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*)
                     FROM chat_messages
@@ -843,18 +956,28 @@ class SectionService:
                 result = cur.fetchone()
                 return result[0] if result else 0
 
-    def _get_session_message_count_since(self, session_id: str, since_time: datetime) -> int:
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
+
+    def _get_session_message_count_since(self, session_id: str, since_time: datetime, conn=None, user_id=None) -> int:
         """获取会话在指定时间之后新增的消息数量。
 
         Args:
             session_id: 会话ID
             since_time: 起始时间
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
 
         Returns:
             int: 新增的消息数量
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*)
                     FROM chat_messages
@@ -864,17 +987,27 @@ class SectionService:
                 result = cur.fetchone()
                 return result[0] if result else 0
 
-    def _get_last_section_time(self, session_id: str) -> Optional[datetime]:
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
+
+    def _get_last_section_time(self, session_id: str, conn=None, user_id=None) -> Optional[datetime]:
         """获取会话上次 Section 整理的时间。
 
         Args:
             session_id: 会话ID
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
 
         Returns:
             Optional[datetime]: 上次整理时间，如果没有则返回 None
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT MAX(updated_at)
                     FROM chat_sections
@@ -884,17 +1017,27 @@ class SectionService:
                 result = cur.fetchone()
                 return result[0] if result and result[0] else None
 
-    def _get_last_section_triggered_at(self, session_id: str) -> Optional[datetime]:
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
+
+    def _get_last_section_triggered_at(self, session_id: str, conn=None, user_id=None) -> Optional[datetime]:
         """获取会话上次触发 Section 整理的时间（用于冷却时间窗控制）。
 
         Args:
             session_id: 会话ID
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
 
         Returns:
             Optional[datetime]: 上次触发时间，如果没有则返回 None
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     SELECT last_section_triggered_at
                     FROM chat_sessions
@@ -904,19 +1047,35 @@ class SectionService:
                 result = cur.fetchone()
                 return result[0] if result and result[0] else None
 
-    def _update_last_section_triggered_at(self, session_id: str) -> None:
+        if conn:
+            return execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                return execute_query(conn)
+
+    def _update_last_section_triggered_at(self, session_id: str, conn=None, user_id=None) -> None:
         """更新会话的 Section 触发时间（用于冷却时间窗控制）。
 
         Args:
             session_id: 会话ID
+            conn: 数据库连接（可选）
+            user_id: 用户ID（可选，用于RLS）
         """
-        with connection_scope() as conn:
-            with conn.cursor() as cur:
+        def execute_query(connection):
+            if user_id:
+                self.set_rls_context(user_id, conn=connection)
+            with connection.cursor() as cur:
                 cur.execute("""
                     UPDATE chat_sessions
                     SET last_section_triggered_at = CURRENT_TIMESTAMP
                     WHERE session_id = %s
                 """, (session_id,))
+
+        if conn:
+            execute_query(conn)
+        else:
+            with connection_scope() as conn:
+                execute_query(conn)
 
     def _enqueue_section_summarize_task(
         self,

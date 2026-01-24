@@ -297,7 +297,7 @@ class VectorClient:
 
                         results[entry_id] = True
                     except Exception as e:
-                        print(f"[VectorClient] Failed to upsert embedding for {entry_id}: {e}")
+                        logger.error(f"Failed to upsert embedding for {entry_id}: {e}")
                         results[entry_id] = False
 
         return results

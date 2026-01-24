@@ -232,6 +232,7 @@ RAG检索时按section_id聚拢，只返回最新版本（is_latest=TRUE）
 | **QACacheService** | 管理Q&A缓存 | `cache_qa()`, `query_qa()`, `hit_qa()` | ✅ |
 | **MemoryService（V3新增）** | 核心记忆服务（四层隔离） | `add_entry()`, `search()`, `get_stats()` | ✅ |
 | **AgentInstanceRegistry（V3新增）** | Agent实例池管理 | `get_or_create_instance()`, `list_instances()` | ✅ |
+| **MemoryClient（V3新增）** | 客户端统一调用入口 | `add_entry()`, `search()`, `get_stats()` | ✅ |
 
 ---
 
@@ -985,7 +986,23 @@ WHERE agent_type = 'recruiting'
 - 实例复用（避免重复创建）
 - 资源限制（防止创建过多实例）
 
-### 10.2 AgentInstanceRegistry设计
+### 10.2 实例生命周期与状态机
+
+Agent 实例在注册表中的生命周期遵循以下状态机：
+
+| 状态 | 描述 | 触发条件 | 行为 |
+| :--- | :--- | :--- | :--- |
+| **Active** | 活跃状态 | 实例被创建或被调用 | 支持高频访问，保持内存连接 |
+| **Idle** | 闲置状态 | 超过 30 分钟未被调用 | 资源就绪，但可随时被后台清理 |
+| **Stopped** | 已停止 | 手动销毁或超时被清理 | 释放内存，断开数据库/向量引擎连接 |
+
+**状态流转规则：**
+1. `Stopped` → `Active`: 调用 `get_or_create_instance`。
+2. `Active` → `Idle`: 持续 30 分钟无请求。
+3. `Idle` → `Active`: 重新收到请求，更新 `last_active`。
+4. `Idle` → `Stopped`: 清理循环触发，且 `last_active` 超时。
+
+### 10.3 AgentInstanceRegistry设计
 
 ```python
 # ai-factory/ai_factory/agents/memory/instance/registry.py
@@ -1185,7 +1202,7 @@ class AgentInstanceRegistry:
 registry = AgentInstanceRegistry(max_instances=1000)
 ```
 
-### 10.3 使用示例
+### 10.4 使用示例
 
 ```python
 # 使用示例
@@ -1349,7 +1366,7 @@ class MemoryService:
         self,
         query: str,
         user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        section_id: Optional[str] = None,
         agent_instance_id: Optional[str] = None,
         limit: int = 10,
         **kwargs
@@ -1360,7 +1377,7 @@ class MemoryService:
         Args:
             query: 查询文本
             user_id: 用户ID（可选，优先从上下文）
-            session_id: 会话ID（可选，用于过滤）
+            section_id: 议题ID（可选，用于过滤）
             agent_instance_id: Agent实例ID（可选，用于过滤）
             limit: 返回条数
             **kwargs: 扩展字段
@@ -1386,8 +1403,8 @@ class MemoryService:
         # 可选过滤
         if agent_instance_id:
             filters["agent_instance_id"] = agent_instance_id
-        if session_id:
-            filters["session_id"] = session_id
+        if section_id:
+            filters["section_id"] = section_id
         
         # 向量搜索
         query_vector = await self._embed(query)
@@ -1500,7 +1517,7 @@ class MemoryClient:
     async def add_entry(
         self,
         content: str,
-        session_id: Optional[str] = None,
+        section_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
         """
@@ -1515,14 +1532,14 @@ class MemoryClient:
         
         return await self.memory_service.add_entry(
             content=content,
-            session_id=session_id,
+            section_id=section_id,
             metadata=metadata
         )
     
     async def search(
         self,
         query: str,
-        session_id: Optional[str] = None,
+        section_id: Optional[str] = None,
         limit: int = 10
     ) -> List[Dict[str, Any]]:
         """搜索入口（必须在上下文中调用）"""
@@ -1531,7 +1548,7 @@ class MemoryClient:
         
         return await self.memory_service.search(
             query=query,
-            session_id=session_id,
+            section_id=section_id,
             limit=limit
         )
 
@@ -2392,19 +2409,17 @@ for entry in entries:
 
 ### 16.2 完整的混合搜索示例
 
-### 16.1 完整的混合搜索示例
-
 （保留增强版文档第5.1节内容）
 
-### 16.2 两阶段写入完整流程
+### 16.3 两阶段写入完整流程
 
 （保留增强版文档第5.2节内容）
 
-### 16.3 MCP工具示例
+### 16.4 MCP工具示例
 
 （保留增强版文档第5.3节内容）
 
-### 16.4 多租户场景完整示例（V3新增）
+### 16.5 多租户场景完整示例（V3新增）
 
 ```python
 from ai_factory.services.memory_service import MemoryService
@@ -2426,21 +2441,21 @@ async def multi_tenant_scenario():
     response1 = await recruiting_agent.chat(
         user_input="找一个Java开发",
         user_id="user_001",
-        session_id="session_001"
+        section_id="section_001"
     )
     
     # 用户1：使用客服机器人（同一用户，不同Agent）
     response2 = await cs_agent.chat(
         user_input="产品有问题",
         user_id="user_001",
-        session_id="session_002"
+        section_id="section_002"
     )
     
     # 用户2：使用招聘助手（不同用户）
     response3 = await recruiting_agent.chat(
         user_input="找一个前端开发",
         user_id="user_002",
-        session_id="session_003"
+        section_id="section_003"
     )
     
     # 验证数据隔离
@@ -3265,59 +3280,31 @@ def batch_create_entries(
 | 5 | EntryService 批量操作无四层隔离 | ❌ | ✅ | 已修复 |
 | 6 | EntryService 向量删除未隔离 | ❌ | ✅ | 已修复 |
 | 7 | EntryService 隔离参数可选 | ❌ | ✅ | 已修复 |
-| 8 | RLS 方法形同虚设，从未被调用 | ❌ | ⏳ | 待修复（P0批次2） |
+| 8 | RLS 方法形同虚设，从未被调用 | ❌ | ✅ | 已修复 |
 
 ### C.4 P1 问题修复状态
 
 | 编号 | 问题 | 修复前 | 修复后 | 状态 |
 |------|------|--------|--------|------|
-| 9 | SectionService 的 RLS 方法未调用 | ❌ | ⏳ | 待修复（P1批次2） |
-| 10 | EntryService search_similar 存在副作用 | ⚠️ | 🔄 | 部分修复（待P1批次2） |
+| 9 | SectionService 的 RLS 方法未调用 | ❌ | ✅ | 已修复 |
+| 10 | EntryService search_similar 存在副作用 | ⚠️ | ✅ | 已修复 |
 | 11 | 四层隔离覆盖不完整（L4 未强制） | ⚠️ | ✅ | 已修复 |
-| 12 | 日志记录不统一 | ⚠️ | 🔄 | 部分修复（待P1批次2） |
-| 13 | Token 计算逻辑不精确 | ⚠️ | ❌ | 待修复（P1批次2） |
-| 14 | 批量操作无日志和异常处理 | ⚠️ | 🔄 | 部分修复（待P1批次2） |
+| 12 | 日志记录不统一 | ⚠️ | ✅ | 已修复 |
+| 13 | Token 计算逻辑不精确 | ⚠️ | ⏳ | 待后续优化 |
+| 14 | 批量操作无日志和异常处理 | ⚠️ | ✅ | 已修复 |
 | 15 | QACacheService 使用 tenant_id 而非四层隔离 | ❌ | ✅ | 已修复 |
 
 ### C.5 下一步工作
 
-**批次2 - RLS双重保障实现**（预计 3-4 小时）:
-1. 📝 在EntryService关键方法中调用RLS上下文
-2. 📝 在Memory0Service关键方法中调用RLS上下文
-3. 📝 在SessionService关键方法中调用RLS上下文
-4. 📝 在MemoryService关键方法中调用RLS上下文
+**近期任务 (2026-01-30前)**:
+1. 📝 **功能验证**: 全面验证四层隔离在并发场景下的有效性。
+2. 📝 **性能压测**: 测试 RLS 开启后的查询延迟（预期开销 < 10%）。
+3. 📝 **集成测试**: 验证与微信笔记、AI 工厂等上层业务的对接。
 
-**批次3 - 代码质量优化**（预计 4-6 小时）:
-5. 📝 统一日志记录格式
-6. 📝 修复 search_similar 副作用
-7. 📝 优化 Token 计算逻辑
-8. 📝 批量操作添加异常处理
-9. 📝 添加单元测试覆盖
-
-**批次4 - 文档和培训**（预计 2-3 小时）:
-10. 📝 更新API文档
-11. 📝 编写迁移指南
-12. 📝 培训开发团队批次1 - 剩余工作**（预计 2-4 小时）:
-1. ⏳ 完成 SessionService 剩余方法
-2. ❌ 升级 MemoryService 到 V3
-3. ❌ 升级 QACacheService 到 V3
-
-**批次2 - 服务完整性修复**（预计 6-8 小时）:
-4. 📝 SessionService 全面升级
-5. 📝 MemoryService 全面升级
-6. 📝 QACacheService 全面升级
-
-**批次3 - RLS 双重保障修复**（预计 3 小时）:
-7. 📝 在关键方法中调用 RLS
-8. 📝 EntryService 关键方法
-9. 📝 Memory0Service 关键方法
-
-**批次4 - 代码质量优化**（预计 2-4 小时）:
-10. 📝 统一日志记录
-11. 📝 修复 search_similar 副作用
-12. 📝 优化 Token 计算逻辑
-13. 📝 批量操作添加异常处理
-
+**长期优化 (V3.2+)**:
+1. 📝 **Token 算法精度提升**: 引入 Tiktoken 或专业库。
+2. 📝 **冷热数据分级存储实现**: 自动化归档 chat_messages。
+3. 📝 **全局知识图谱构建**: 基于 entries 关系字段自动生成。
 ### C.6 修复原则
 
 1. **安全性优先**: 所有写操作必须包含 user_id 参数（必需）

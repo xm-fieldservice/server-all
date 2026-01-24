@@ -76,6 +76,37 @@ class QACacheService:
         from .llm_client import get_llm_client
         self.llm_client = get_llm_client()
 
+    def set_rls_context(
+        self,
+        user_id: str,
+        agent_type: str,
+        agent_instance_id: str,
+        conn=None
+    ) -> None:
+        """设置RLS上下文变量（V3.0）。
+
+        Args:
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
+            conn: 数据库连接（可选）
+        """
+        from ai_factory.db.pgvector_client import connection_scope
+        try:
+            if conn is None:
+                with connection_scope() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
+                        cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+            else:
+                with conn.cursor() as cur:
+                    cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
+                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+        except Exception as e:
+            logger.error(f"Failed to set RLS context: {e}")
+
     def _get_connection(self):
         """获取数据库连接"""
         from ai_factory.db.pgvector_client import connection_scope
@@ -93,7 +124,8 @@ class QACacheService:
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         answer_type: AnswerType = AnswerType.CACHED,
-        quality_score: float = 0.8
+        quality_score: float = 0.8,
+        conn=None
     ) -> str:
         """
         缓存Q&A对（V3.0: 支持四层隔离）
@@ -110,6 +142,7 @@ class QACacheService:
             metadata: 可选，元数据
             answer_type: 答案类型，默认为 CACHED
             quality_score: 质量分数，默认为 0.8
+            conn: 数据库连接（可选）
 
         Returns:
             str: qa_id
@@ -125,9 +158,19 @@ class QACacheService:
         # 生成 qa_id
         qa_id = f"qa_{uuid.uuid4().hex[:16]}"
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                # V3.0: 支持agent_type和agent_instance_id字段
+        # 确保隔离参数不为空
+        a_type = agent_type or "default_type"
+        a_inst = agent_instance_id or "default_instance"
+
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            # 如果是 connection_scope，结果是 conn；如果是 conn.cursor()，结果是 cur
+            # 为统一逻辑，处理如下：
+            if conn:
+                cur = scope
+                # 设置 RLS 上下文
+                self.set_rls_context(user_id, a_type, a_inst, conn=conn)
+                
                 cur.execute("""
                     INSERT INTO qa_query_index
                     (qa_id, user_id, assistant_id, tenant_id, agent_type, agent_instance_id,
@@ -137,13 +180,33 @@ class QACacheService:
                      tags, metadata_json, created_at, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     RETURNING qa_id
-                """, (qa_id, user_id, assistant_id, tenant_id, agent_type, agent_instance_id,
+                """, (qa_id, user_id, assistant_id, tenant_id, a_type, a_inst,
                        normalized_question, question_embedding, answer_entry_id, answer_type.value,
                        0, None, QAStatus.ACTIVE.value, quality_score,
                        tags if tags else None,
                        json.dumps(metadata) if metadata else None))
+            else:
+                db_conn = scope
+                # 设置 RLS 上下文
+                self.set_rls_context(user_id, a_type, a_inst, conn=db_conn)
+                
+                with db_conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO qa_query_index
+                        (qa_id, user_id, assistant_id, tenant_id, agent_type, agent_instance_id,
+                         normalized_question, question_embedding,
+                         answer_entry_id, answer_type,
+                         hit_count, last_hit_at, status, quality_score,
+                         tags, metadata_json, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        RETURNING qa_id
+                    """, (qa_id, user_id, assistant_id, tenant_id, a_type, a_inst,
+                           normalized_question, question_embedding, answer_entry_id, answer_type.value,
+                           0, None, QAStatus.ACTIVE.value, quality_score,
+                           tags if tags else None,
+                           json.dumps(metadata) if metadata else None))
 
-        logger.debug(f"Cached QA {qa_id} with isolation: user_id={user_id}, agent_type={agent_type}, agent_instance_id={agent_instance_id}")
+        logger.debug(f"Cached QA {qa_id} with isolation: user_id={user_id}, agent_type={a_type}, agent_instance_id={a_inst}")
         return qa_id
 
     def query_qa(
@@ -155,7 +218,8 @@ class QACacheService:
         agent_type: Optional[str] = None,  # V3.0
         agent_instance_id: Optional[str] = None,  # V3.0
         threshold: float = 0.85,
-        limit: int = 5
+        limit: int = 5,
+        conn=None
     ) -> List[QAInfo]:
         """
         查询相似的Q&A（V3.0: 支持四层隔离）
@@ -169,6 +233,7 @@ class QACacheService:
             agent_instance_id: Agent实例ID（V3.0）
             threshold: 相似度阈值，默认为 0.85
             limit: 返回结果数量限制，默认为 5
+            conn: 数据库连接（可选）
 
         Returns:
             List[QAInfo]: 匹配的Q&A列表，按相似度和命中次数排序
@@ -179,20 +244,30 @@ class QACacheService:
         # 生成问题 embedding
         question_embedding = self._generate_embedding(normalized_question)
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                # V3.0: 构建四层隔离条件
-                conditions = ["user_id = %s", "assistant_id = %s", "tenant_id = %s", "status = %s"]
-                params = [user_id, assistant_id, tenant_id, QAStatus.ACTIVE.value]
+        # 确保隔离参数不为空
+        a_type = agent_type or "default_type"
+        a_inst = agent_instance_id or "default_instance"
 
-                # V3.0: 仅在调用方显式传入时才做过滤；否则不强制 IS NULL，避免旧数据/新数据互相“查不到”
-                if agent_type is not None:
-                    conditions.append("agent_type = %s")
-                    params.append(agent_type)
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=conn)
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=db_conn)
+                cur = db_conn.cursor()
 
-                if agent_instance_id is not None:
-                    conditions.append("agent_instance_id = %s")
-                    params.append(agent_instance_id)
+            try:
+                # V3.0: 构建四层隔离条件 (虽然有 RLS，但 SQL 显式带上过滤条件性能更好，且双重保险)
+                conditions = ["user_id = %s", "assistant_id = %s", "status = %s"]
+                params = [user_id, assistant_id, QAStatus.ACTIVE.value]
+
+                # RLS 已经强制了 agent_type 和 agent_instance_id，这里显式带上以确保逻辑一致
+                conditions.append("agent_type = %s")
+                params.append(a_type)
+                conditions.append("agent_instance_id = %s")
+                params.append(a_inst)
 
                 # 使用 pgvector 的余弦相似度检索
                 cur.execute(f"""
@@ -209,7 +284,7 @@ class QACacheService:
                 """, params + [question_embedding, question_embedding, threshold, limit])
 
                 rows = cur.fetchall()
-                return [
+                results = [
                     QAInfo(
                         qa_id=row[0],
                         user_id=row[1],
@@ -231,31 +306,57 @@ class QACacheService:
                     )
                     for row in rows
                 ]
+                return results
+            finally:
+                if not conn:
+                    cur.close()
 
     def hit_qa(
         self,
-        qa_id: str
+        qa_id: str,
+        user_id: str,
+        agent_type: str,
+        agent_instance_id: str,
+        conn=None
     ) -> bool:
         """
-        记录Q&A命中
+        记录Q&A命中（V3.0: 增加隔离参数以支持RLS）
 
         Args:
             qa_id: Q&A ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
+            conn: 数据库连接（可选）
 
         Returns:
             bool: 是否成功更新
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
                 cur.execute("""
                     UPDATE qa_query_index
                     SET hit_count = hit_count + 1,
                         last_hit_at = CURRENT_TIMESTAMP,
                         updated_at = CURRENT_TIMESTAMP
-                    WHERE qa_id = %s
-                """, (qa_id,))
-
+                    WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                """, (qa_id, user_id, agent_type, agent_instance_id))
                 return cur.rowcount > 0
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=db_conn)
+                with db_conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE qa_query_index
+                        SET hit_count = hit_count + 1,
+                            last_hit_at = CURRENT_TIMESTAMP,
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                    """, (qa_id, user_id, agent_type, agent_instance_id))
+                    return cur.rowcount > 0
 
     def _parse_quality_score(self, quality_score_value):
         """
@@ -286,26 +387,46 @@ class QACacheService:
 
     def deprecate_qa(
         self,
-        qa_id: str
+        qa_id: str,
+        user_id: str,
+        agent_type: str,
+        agent_instance_id: str,
+        conn=None
     ) -> bool:
         """
-        标记Q&A为已废弃
+        标记Q&A为已废弃（V3.0: 增加隔离参数以支持RLS）
 
         Args:
             qa_id: Q&A ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
+            conn: 数据库连接（可选）
 
         Returns:
             bool: 是否成功更新
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
                 cur.execute("""
                     UPDATE qa_query_index
                     SET status = %s, updated_at = CURRENT_TIMESTAMP
-                    WHERE qa_id = %s
-                """, (QAStatus.DEPRECATED.value, qa_id,))
-
+                    WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                """, (QAStatus.DEPRECATED.value, qa_id, user_id, agent_type, agent_instance_id))
                 return cur.rowcount > 0
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=db_conn)
+                with db_conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE qa_query_index
+                        SET status = %s, updated_at = CURRENT_TIMESTAMP
+                        WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                    """, (QAStatus.DEPRECATED.value, qa_id, user_id, agent_type, agent_instance_id))
+                    return cur.rowcount > 0
 
     def get_user_qa_stats(
         self,
@@ -314,7 +435,8 @@ class QACacheService:
         tenant_id: Optional[str] = None,  # V3.0: 保留向后兼容
         agent_type: Optional[str] = None,  # V3.0
         agent_instance_id: Optional[str] = None,  # V3.0
-        limit: int = 100
+        limit: int = 100,
+        conn=None
     ) -> QAStats:
         """
         获取用户的Q&A统计（V3.0: 支持四层隔离）
@@ -326,15 +448,28 @@ class QACacheService:
             agent_type: Agent类型（V3.0）
             agent_instance_id: Agent实例ID（V3.0）
             limit: 返回结果数量限制，默认为 100
+            conn: 数据库连接（可选）
 
         Returns:
             QAStats: Q&A统计信息
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
+        a_type = agent_type or "default_type"
+        a_inst = agent_instance_id or "default_instance"
+
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=conn)
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=db_conn)
+                cur = db_conn.cursor()
+
+            try:
                 # V3.0: 构建查询条件
-                conditions = ["user_id = %s"]
-                params = [user_id]
+                conditions = ["user_id = %s", "agent_type = %s", "agent_instance_id = %s"]
+                params = [user_id, a_type, a_inst]
 
                 if assistant_id:
                     conditions.append("assistant_id = %s")
@@ -343,14 +478,6 @@ class QACacheService:
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
-
-                if agent_type:
-                    conditions.append("agent_type = %s")
-                    params.append(agent_type)
-
-                if agent_instance_id:
-                    conditions.append("agent_instance_id = %s")
-                    params.append(agent_instance_id)
 
                 # 获取用户的所有Q&A
                 cur.execute(f"""
@@ -402,6 +529,9 @@ class QACacheService:
                     warm_qas=warm_qas[:10],
                     cold_qas=cold_qas[:10]
                 )
+            finally:
+                if not conn:
+                    cur.close()
 
     def cleanup_old_qa(
         self,
@@ -411,7 +541,8 @@ class QACacheService:
         agent_type: Optional[str] = None,  # V3.0
         agent_instance_id: Optional[str] = None,  # V3.0
         days_threshold: int = 180,  # 180天未命中则清理
-        keep_top_n: int = 50  # 每个用户保留N条高频Q&A
+        keep_top_n: int = 50,  # 每个用户保留N条高频Q&A
+        conn=None
     ) -> int:
         """
         清理旧的Q&A（V3.0: 支持四层隔离）
@@ -424,17 +555,29 @@ class QACacheService:
             agent_instance_id: Agent实例ID（V3.0）
             days_threshold: 未命中天数阈值，默认为 180 天
             keep_top_n: 保留的高频Q&A数量，默认为 50
+            conn: 数据库连接（可选）
 
         Returns:
             int: 删除的Q&A数量
         """
         cutoff_date = datetime.now() - timedelta(days=days_threshold)
+        a_type = agent_type or "default_type"
+        a_inst = agent_instance_id or "default_instance"
 
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=conn)
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, a_type, a_inst, conn=db_conn)
+                cur = db_conn.cursor()
+
+            try:
                 # V3.0: 构建查询条件
-                conditions = ["user_id = %s", "status = %s"]
-                params = [user_id, QAStatus.ACTIVE.value]
+                conditions = ["user_id = %s", "status = %s", "agent_type = %s", "agent_instance_id = %s"]
+                params = [user_id, QAStatus.ACTIVE.value, a_type, a_inst]
 
                 if assistant_id:
                     conditions.append("assistant_id = %s")
@@ -443,14 +586,6 @@ class QACacheService:
                 if tenant_id:
                     conditions.append("tenant_id = %s")
                     params.append(tenant_id)
-
-                if agent_type:
-                    conditions.append("agent_type = %s")
-                    params.append(agent_type)
-
-                if agent_instance_id:
-                    conditions.append("agent_instance_id = %s")
-                    params.append(agent_instance_id)
 
                 # 先删除超过阈值未命中的Q&A
                 delete_sql = f"""
@@ -480,33 +615,53 @@ class QACacheService:
                     """, params + [keep_top_n])
                     deleted_count += cur.rowcount
 
-        logger.debug(f"Cleaned up {deleted_count} old QAs for user={user_id}")
-        return deleted_count
+                logger.debug(f"Cleaned up {deleted_count} old QAs for user={user_id}, agent_type={a_type}")
+                return deleted_count
+            finally:
+                if not conn:
+                    cur.close()
 
     def get_qa(
         self,
-        qa_id: str
+        qa_id: str,
+        user_id: str,
+        agent_type: str,
+        agent_instance_id: str,
+        conn=None
     ) -> Optional[QAInfo]:
         """
-        获取单个Q&A（V3.0: 支持四层隔离字段）
+        获取单个Q&A（V3.0: 支持四层隔离字段，补齐RLS支持）
 
         Args:
             qa_id: Q&A ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
+            conn: 数据库连接（可选）
 
         Returns:
             Optional[QAInfo]: Q&A信息，如果不存在则返回 None
         """
-        with self._get_connection() as conn:
-            with conn.cursor() as cur:
-                # V3.0: 查询包含四层隔离字段
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=db_conn)
+                cur = db_conn.cursor()
+
+            try:
+                # V3.0: 查询包含四层隔离字段，且增加 WHERE 条件
                 cur.execute("""
                     SELECT qa_id, user_id, assistant_id, tenant_id, agent_type, agent_instance_id,
                            normalized_question, answer_entry_id, answer_type,
                            hit_count, last_hit_at, status, quality_score,
                            tags, metadata_json, created_at, updated_at
                     FROM qa_query_index
-                    WHERE qa_id = %s
-                """, (qa_id,))
+                    WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                """, (qa_id, user_id, agent_type, agent_instance_id))
 
                 row = cur.fetchone()
                 if row:
@@ -530,24 +685,35 @@ class QACacheService:
                         updated_at=row[16]
                     )
                 return None
+            finally:
+                if not conn:
+                    cur.close()
 
     def update_qa(
         self,
         qa_id: str,
+        user_id: str,
+        agent_type: str,
+        agent_instance_id: str,
         quality_score: Optional[float] = None,
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        status: Optional[QAStatus] = None
+        status: Optional[QAStatus] = None,
+        conn=None
     ) -> bool:
         """
-        更新Q&A信息
+        更新Q&A信息（V3.0: 补齐RLS支持）
 
         Args:
             qa_id: Q&A ID
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
             quality_score: 可选，质量分数
             tags: 可选，标签列表
             metadata: 可选，元数据
             status: 可选，状态
+            conn: 数据库连接（可选）
 
         Returns:
             bool: 是否成功更新
@@ -571,21 +737,36 @@ class QACacheService:
             updates.append("status = %s")
             params.append(status.value)
 
-        if updates:
-            updates.append("updated_at = CURRENT_TIMESTAMP")
-            params.append(qa_id)
+        if not updates:
+            return False
 
-        if updates:
-            with self._get_connection() as conn:
-                with conn.cursor() as cur:
+        updates.append("updated_at = CURRENT_TIMESTAMP")
+        
+        from ai_factory.db.pgvector_client import connection_scope
+        with (conn.cursor() if conn else connection_scope()) as scope:
+            if conn:
+                cur = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+                
+                # 构建完整的参数列表：updates中的参数 + WHERE条件的参数
+                full_params = params + [qa_id, user_id, agent_type, agent_instance_id]
+                cur.execute(f"""
+                    UPDATE qa_query_index
+                    SET {", ".join(updates)}
+                    WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                """, full_params)
+                return cur.rowcount > 0
+            else:
+                db_conn = scope
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=db_conn)
+                with db_conn.cursor() as cur:
+                    full_params = params + [qa_id, user_id, agent_type, agent_instance_id]
                     cur.execute(f"""
                         UPDATE qa_query_index
                         SET {", ".join(updates)}
-                        WHERE qa_id = %s
-                    """, params)
-
+                        WHERE qa_id = %s AND user_id = %s AND agent_type = %s AND agent_instance_id = %s
+                    """, full_params)
                     return cur.rowcount > 0
-        return False
 
     def _normalize_question(self, question: str) -> str:
         """

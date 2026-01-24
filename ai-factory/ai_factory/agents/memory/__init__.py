@@ -35,6 +35,8 @@ from .memory_service import (
     ContextSnippet,
     ContextForTurn,
 )
+from .api.client import MemoryClient
+from .registry import AgentInstanceRegistry, AgentInstanceStatus, AgentInstanceMetadata
 from .vector_client import VectorClient
 from .llm_client import LLMClient, get_llm_client, LLMConfig, EmbeddingConfig
 from .task_queue import TaskQueue, Memory0Task, TaskStatus, TaskType, get_task_queue
@@ -110,6 +112,12 @@ __all__ = [
     "MemoryService",
     "ContextSnippet",
     "ContextForTurn",
+    # MemoryClient
+    "MemoryClient",
+    # AgentInstanceRegistry
+    "AgentInstanceRegistry",
+    "AgentInstanceStatus",
+    "AgentInstanceMetadata",
     # QACacheService
     "QACacheService",
     "QAStatus",

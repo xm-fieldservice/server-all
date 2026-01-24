@@ -443,22 +443,23 @@ DROP POLICY IF EXISTS user_agent_isolation ON entries;
 CREATE POLICY user_agent_isolation ON entries
     FOR ALL
     USING (
-        user_id = current_setting('app.current_user_id', true) OR
-        current_setting('app.current_user_id', true) IS NULL
+        user_id = current_setting('app.current_user_id', true) AND
+        agent_type = current_setting('app.current_agent_type', true) AND
+        agent_instance_id = current_setting('app.current_agent_instance_id', true)
     );
 
 RAISE NOTICE '[entries] RLS 行级安全已启用';
 
--- （可选）为 chat_sessions 和 chat_sections 也启用 RLS
--- ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY user_isolation_sessions ON chat_sessions
---     FOR ALL
---     USING (user_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_id', true) IS NULL);
+-- 为 chat_sessions 和 chat_sections 也启用 RLS
+ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_isolation_sessions ON chat_sessions
+    FOR ALL
+    USING (user_id = current_setting('app.current_user_id', true));
 
--- ALTER TABLE chat_sections ENABLE ROW LEVEL SECURITY;
--- CREATE POLICY user_isolation_sections ON chat_sections
---     FOR ALL
---     USING (user_id = current_setting('app.current_user_id', true) OR current_setting('app.current_user_id', true) IS NULL);
+ALTER TABLE chat_sections ENABLE ROW LEVEL SECURITY;
+CREATE POLICY user_isolation_sections ON chat_sections
+    FOR ALL
+    USING (user_id = current_setting('app.current_user_id', true));
 
 -- ============================================================
 -- 6. 数据验证

@@ -7,10 +7,13 @@ Follows the design in section 1.10/3.6 of `Agent记忆系统详细设计与施�
 from __future__ import annotations
 
 import uuid
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 from ai_factory.db.pgvector_client import connection_scope
 from psycopg2.extras import Json
@@ -159,7 +162,7 @@ class Memory0Service:
         try:
             candidate_embedding = self.llm_client.generate_embedding_sync(candidate.content)
         except Exception as e:
-            print(f"[Memory0Service] Warning: Failed to generate embedding: {e}")
+            logger.warning(f"Failed to generate embedding: {e}")
             # 如果embedding生成失败，直接作为NEW处理
             return self._handle_new(candidate, None)
 
@@ -208,50 +211,63 @@ class Memory0Service:
             MemoryResult: 治理结果
         """
         # 1. 获取条目信息
-        # 说明：EntryService.get_entry 在 V3.0 强制需要 user_id；这里是 Worker 消费入口，先无隔离读取一次拿到隔离字段。
+        # 说明：由于启用了 RLS，Worker 必须能够绕过隔离或提供正确的上下文。
+        # 暂时通过直接 SQL 查询获取隔离信息（假设 Worker 拥有足够权限或 RLS 未完全锁死此操作）
         with connection_scope() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM entries WHERE entry_id = %s", (entry_id,))
+                cur.execute("SELECT user_id, agent_type, agent_instance_id, content, scene_tags, space_type, extra_meta FROM entries WHERE entry_id = %s", (entry_id,))
                 row = cur.fetchone()
                 if row is None:
-                    raise ValueError(f"Entry {entry_id} not found")
-                col_names = [desc[0] for desc in cur.description]
-                entry = dict(zip(col_names, row))
+                    raise ValueError(f"Entry {entry_id} not found or RLS access denied")
+                
+                user_id = row[0]
+                agent_type = row[1]
+                agent_instance_id = row[2]
+                content = row[3]
+                scene_tags = row[4]
+                space_type = row[5]
+                extra_meta = row[6]
 
-        # 2. 构造候选对象（V3.0: 携带隔离字段）
-        candidate = MemoryCandidate(
-            content=entry.get("content", ""),
-            user_id=entry.get("user_id", "default"),
-            agent_id=entry.get("agent_id", "default"),
-            agent_type=entry.get("agent_type"),
-            agent_instance_id=entry.get("agent_instance_id"),
-            scene_tags=entry.get("scene_tags", {}) or {},
-            space_type=entry.get("space_type", "note") or "note",
-            metadata=entry.get("extra_meta") or entry.get("metadata") or {},
-        )
-
-        # 3. 调用 upsert_memory 进行治理
-        result = self.upsert_memory(candidate)
-
-        # 4. 如果是NEW，更新原条目的importance和last_seen_at（V3.0: 传递四层隔离参数）
-        if result.relation == MemoryRelation.NEW:
-            self._update_entry_importance(
-                entry_id,
-                1.0,
-                candidate.user_id,
-                candidate.agent_type,
-                candidate.agent_instance_id,
-            )
-        # 如果是UPDATE或DUPLICATE，更新原条目的usage_count和last_seen_at（V3.0: 传递四层隔离参数）
-        elif result.relation in (MemoryRelation.UPDATE, MemoryRelation.DUPLICATE):
-            self._update_entry_usage(
-                entry_id,
-                candidate.user_id,
-                candidate.agent_type,
-                candidate.agent_instance_id,
+        # 2. 设置 RLS 上下文 (V3.1.2 加固)
+        self.entry_service.set_rls_context(user_id, agent_type or "", agent_instance_id or "")
+        
+        try:
+            # 3. 构造候选对象（V3.0: 携带隔离字段）
+            candidate = MemoryCandidate(
+                content=content or "",
+                user_id=user_id or "default",
+                agent_id=self.agent_id,
+                agent_type=agent_type,
+                agent_instance_id=agent_instance_id,
+                scene_tags=scene_tags or {},
+                space_type=space_type or "note",
+                metadata=extra_meta or {},
             )
 
-        return result
+            # 4. 调用 upsert_memory 进行治理
+            result = self.upsert_memory(candidate)
+
+            # 5. 如果是NEW，更新原条目的importance和last_seen_at（V3.0: 传递四层隔离参数）
+            if result.relation == MemoryRelation.NEW:
+                self._update_entry_importance(
+                    entry_id,
+                    1.0,
+                    candidate.user_id,
+                    candidate.agent_type,
+                    candidate.agent_instance_id,
+                )
+            # 如果是UPDATE或DUPLICATE，更新原条目的usage_count和last_seen_at（V3.0: 传递四层隔离参数）
+            elif result.relation in (MemoryRelation.UPDATE, MemoryRelation.DUPLICATE):
+                self._update_entry_usage(
+                    entry_id,
+                    candidate.user_id,
+                    candidate.agent_type,
+                    candidate.agent_instance_id,
+                )
+
+            return result
+        finally:
+            self.entry_service.clear_rls_context()
 
     def _handle_new(
         self,
@@ -289,7 +305,7 @@ class Memory0Service:
             try:
                 self.vector_client.upsert_embedding(entry_id, embedding)
             except Exception as e:
-                print(f"[Memory0Service] Warning: Failed to upsert embedding: {e}")
+                logger.warning(f"Failed to upsert embedding: {e}")
 
         return MemoryResult(
             relation=MemoryRelation.NEW,
@@ -460,7 +476,7 @@ class Memory0Service:
             try:
                 self.vector_client.upsert_embedding(new_entry_id, embedding)
             except Exception as e:
-                print(f"[Memory0Service] Warning: Failed to upsert embedding: {e}")
+                logger.warning(f"Failed to upsert embedding: {e}")
 
         return MemoryResult(
             relation=MemoryRelation.OVERRIDE,
@@ -508,7 +524,7 @@ class Memory0Service:
         return new_content[:prefix_len] == old_content[:prefix_len]
 
     def _update_entry_importance(self, entry_id: str, factor: float, user_id: str, agent_type: Optional[str] = None, agent_instance_id: Optional[str] = None) -> None:
-        """更新条目的importance（V3.0: 添加四层隔离检查）。
+        """更新条目的importance（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             entry_id: 条目ID
@@ -518,6 +534,8 @@ class Memory0Service:
             agent_instance_id: Agent实例ID（V3.0: 可选）
         """
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.entry_service.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 # V3.0: 添加四层隔离过滤条件
                 conditions = ["entry_id = %s", "user_id = %s"]
@@ -538,7 +556,7 @@ class Memory0Service:
                 """, params + [factor])
 
     def _update_entry_usage(self, entry_id: str, user_id: str, agent_type: Optional[str] = None, agent_instance_id: Optional[str] = None) -> None:
-        """更新条目的usage_count和last_seen_at（V3.0: 添加四层隔离检查）。
+        """更新条目的usage_count和last_seen_at（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             entry_id: 条目ID
@@ -547,6 +565,8 @@ class Memory0Service:
             agent_instance_id: Agent实例ID（V3.0: 可选）
         """
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.entry_service.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 # V3.0: 添加四层隔离过滤条件
                 conditions = ["entry_id = %s", "user_id = %s"]
@@ -595,7 +615,7 @@ class Memory0Service:
             reason = judgment.get("reason", "")
             confidence = judgment.get("confidence", 0.5)
 
-            print(f"[Memory0Service] LLM judgment: relation={relation}, reason={reason}, confidence={confidence}")
+            logger.info(f"LLM judgment: relation={relation}, reason={reason}, confidence={confidence}")
 
             # 根据判定结果处理
             if relation == "new":
@@ -615,12 +635,12 @@ class Memory0Service:
                 return self._handle_override(candidate, embedding, existing_entry_id)
             else:
                 # 未知关系类型，默认为 NEW
-                print(f"[Memory0Service] Warning: Unknown relation type '{relation}', defaulting to NEW")
+                logger.warning(f"Unknown relation type '{relation}', defaulting to NEW")
                 return self._handle_new(candidate, embedding)
 
         except Exception as e:
             # LLM 判定失败，回退到规则判定
-            print(f"[Memory0Service] Warning: LLM judgment failed: {e}, falling back to rule-based judgment")
+            logger.warning(f"LLM judgment failed: {e}, falling back to rule-based judgment")
 
             # 检查是否有冲突信号
             has_conflict = self._detect_conflict(candidate.content, existing_content)
@@ -637,7 +657,7 @@ class Memory0Service:
         agent_type: Optional[str] = None,
         agent_instance_id: Optional[str] = None,
     ) -> None:
-        """标记条目为deprecated（V3.0: 添加隔离过滤）。
+        """标记条目为deprecated（V3.1.2: 强制 RLS 上下文）。
 
         Args:
             entry_id: 条目ID
@@ -657,6 +677,8 @@ class Memory0Service:
         where_clause = " AND ".join(conditions)
 
         with connection_scope() as conn:
+            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
+            self.entry_service.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 # 将 is_latest 标记为 FALSE
                 cur.execute(
