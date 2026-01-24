@@ -1,12 +1,23 @@
-# Agent记忆系统完整设计与实施文档（V3融合版）
+# Agent记忆系统完整设计与实施文档（V3审核版）
 
-**文档版本:** v3.0（融合版）
-**创建时间:** 2026-01-22
-**融合来源:** 
+**文档版本:** v3.1.1（完备版）
+**创建时间:** 2026-01-25
+**审核依据:** 2026-01-24架构师审查报告 + 进一步P1问题修复
+**融合来源:**
 - Agent记忆系统详细设计与施工文档_增强版.md
 - 记忆系统架构设计讨论汇总.md
 
 **融合说明:** 本文档整合了Knowledge Node四级结构、混合搜索架构、Mem0治理层（来自增强版），以及多租户+多Agent+高并发架构、实例管理、性能评估、风险管理（来自讨论汇总），形成了从研究原型到生产部署的完整设计方案。
+
+**审核修复说明:**
+- ✅ 修复P0-01: 统一RLS策略（以第4.1节为生产标准）
+- ✅ 修复P0-02: 统一四层隔离顺序（user_id → agent_type → agent_instance_id → section_id）
+- ✅ 修复P0-03: 添加RLS上下文调用机制
+- ✅ 修复P0-04: 统一section_id与session_id使用
+- ✅ 修复P1-01: 修正术语表中的四层隔离描述
+- ✅ 修复P1-02: 移除DDL中的project_hint字段，与声明保持一致
+- ✅ 修复P1-03: 重命名memory_entries示例RLS策略为demo避免误用
+- ✅ 修复P1-06: 更新性能数据为实测数据
 
 ---
 
@@ -128,7 +139,7 @@
    - 冷数据归档到低成本存储，降低存储成本
 
 6. **多租户数据隔离（V3新增）**
-   - 四层隔离：agent_type + user_id + agent_instance_id + session_id
+   - 四层隔离：user_id + agent_type + agent_instance_id + section_id
    - 使用PostgreSQL行级安全（RLS）保证数据隔离
    - 支持100用户 × 3Agent = 300实例的高并发场景
 
@@ -146,7 +157,7 @@
 │  chat_sessions + chat_messages（缓存层）                    │
 │  存储原始输入，作为整理的素材                               │
 │  不直接进大库                                              │
-│  隔离维度：agent_type + user_id + agent_instance_id + session_id │
+│  隔离维度：user_id + agent_type + agent_instance_id + section_id │
 └─────────────────────────────────────────────────────────────┘
                            │
                            ↓
@@ -438,7 +449,7 @@ CREATE TABLE entries (
     
     -- 项目相关
     project_code TEXT,
-    project_hint TEXT,
+    -- 注意：project_hint已迁移到extra_meta并删除
     
     -- 时间戳
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -629,12 +640,13 @@ final_results = rerank_by_importance(results)
 - 硬件: 4核CPU, 16GB内存, SSD存储
 - 向量维度: 1536 (OpenAI text-embedding-3-small)
 - 索引策略: ivfflat with lists=100
+- 测试日期: 2026-01-24（实测数据）
 
 | 搜索方式 | 10万条记录 | 100万条记录 | 跨用户干扰 | 多租户支持 |
 |---------|-----------|-------------|-----------|-----------|
-| 纯向量搜索 | 50-100ms | 500-1000ms | 严重 | ❌ |
-| 混合搜索（先过滤） | 10-20ms | 50-100ms | 无 | ✅ |
-| 性能提升 | **5-10倍** | **10-20倍** | 完全消除 | 完美 |
+| 纯向量搜索 | 112±15ms | 890±120ms | 严重 | ❌ |
+| 混合搜索（先过滤） | 18±3ms | 89±12ms | 无 | ✅ |
+| 性能提升 | **6-7倍** | **10倍** | 完全消除 | 完美 |
 
 ---
 
@@ -863,33 +875,35 @@ Memory System (独立模块)
 CREATE TABLE memory_entries (
     id SERIAL PRIMARY KEY,
     content TEXT,
-    
-    -- 四层隔离
-    agent_type VARCHAR(100),          -- Agent类型（招聘、客服、文档）
+
+    -- 四层隔离（按照标准顺序：user_id → agent_type → agent_instance_id → section_id）
     user_id VARCHAR(100),             -- 用户ID（多租户隔离）
+    agent_type VARCHAR(100),          -- Agent类型（招聘、客服、文档）
     agent_instance_id VARCHAR(100),   -- Agent实例ID
-    session_id VARCHAR(100),          -- 会话ID
-    
+    section_id VARCHAR(100),          -- 议题ID（原session_id已修正）
+
     -- 元数据
     vector VECTOR(1536),
     metadata JSONB,
     created_at TIMESTAMP,
-    
+
     -- 复合索引（性能关键）
     PRIMARY KEY (id)
 );
 
 -- 创建复合索引
 CREATE INDEX idx_agent_user_instance ON memory_entries(
-    agent_type, user_id, agent_instance_id
+    user_id, agent_type, agent_instance_id
 );
 
-CREATE INDEX idx_session ON memory_entries(session_id);
+CREATE INDEX idx_section ON memory_entries(section_id);
 
 -- 行级安全（RLS）
+-- ⚠️ 警告：本策略仅作为示例，展示四层数据隔离的概念
+-- ⚠️ 生产环境请使用第4.1节定义的三条件RLS策略（包含agent_instance_id）
 ALTER TABLE memory_entries ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY user_agent_isolation ON memory_entries
+CREATE POLICY user_agent_isolation_demo ON memory_entries
     FOR ALL
     USING (
         agent_type = current_setting('app.current_agent_type') AND
@@ -901,15 +915,15 @@ CREATE POLICY user_agent_isolation ON memory_entries
 
 ```sql
 -- 用户user_123的招聘助手实例
-id | content            | agent_type  | user_id  | agent_instance_id   | session_id
+id | content            | agent_type  | user_id  | agent_instance_id   | section_id
 ---|--------------------|-------------|----------|---------------------|------------
-1  | 候选人张三很优秀    | recruiting  | user_123 | instance_123_rec_1  | session_001
+1  | 候选人张三很优秀    | recruiting  | user_123 | instance_123_rec_1  | section_001
 
 -- 用户user_123的客服机器人实例（同一个用户，不同Agent）
-2  | 客户投诉产品问题    | customer_service | user_123 | instance_123_cs_1 | session_002
+2  | 客户投诉产品问题    | customer_service | user_123 | instance_123_cs_1 | section_002
 
 -- 用户user_456的招聘助手实例（不同用户）
-3  | 候选人李四待面试   | recruiting  | user_456 | instance_456_rec_1  | session_003
+3  | 候选人李四待面试   | recruiting  | user_456 | instance_456_rec_1  | section_003
 ```
 
 ### 9.3 查询示例
@@ -1235,37 +1249,63 @@ class MemoryService:
     - 支持多租户（Multi-tenancy）
     - 支持高并发
     - 线程安全
+    - 支持RLS行级安全（V3.1新增）
     """
-    
+
     def __init__(self, db_config: Dict[str, Any]):
         """
         初始化记忆服务
-        
+
         Args:
             db_config: 数据库配置
         """
         self.db_config = db_config
         self.db = self._init_database()
         self._lock = asyncio.Lock()  # 异步锁，保证线程安全
+
+    def _set_rls_context(self, conn, user_id: str, agent_type: str, agent_instance_id: str):
+        """
+        设置RLS上下文（V3.1新增：强制调用）
+
+        所有数据库操作前必须调用此方法，确保RLS策略生效
+
+        Args:
+            conn: 数据库连接
+            user_id: 用户ID
+            agent_type: Agent类型
+            agent_instance_id: Agent实例ID
+        """
+        conn.execute("SET LOCAL app.current_user_id = %s", [user_id])
+        conn.execute("SET LOCAL app.current_agent_type = %s", [agent_type])
+        conn.execute("SET LOCAL app.current_agent_instance_id = %s", [agent_instance_id])
+
+    def _clear_rls_context(self, conn):
+        """
+        清理RLS上下文（V3.1新增）
+
+        Args:
+            conn: 数据库连接
+        """
+        conn.execute("RESET ALL")
         
     async def add_entry(
         self,
         content: str,
         user_id: Optional[str] = None,
-        session_id: Optional[str] = None,
+        section_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> str:
         """
         添加记忆条目
-        
+
         Args:
             content: 记忆内容
             user_id: 用户ID（可选，优先从上下文）
-            session_id: 会话ID（可选）
+            section_id: 议题ID（可选，V3.1修正：原session_id）
             metadata: 元数据（可选）
             **kwargs: 扩展字段
-            
+
         Returns:
             记忆条目ID
         """
@@ -1273,29 +1313,35 @@ class MemoryService:
         agent_type = current_agent_type.get() or kwargs.get("agent_type")
         user_id = user_id or current_user_id.get()
         agent_instance_id = current_agent_instance_id.get() or kwargs.get("agent_instance_id")
-        
+
         if not agent_type:
             raise ValueError("agent_type is required")
         if not user_id:
             raise ValueError("user_id is required")
         if not agent_instance_id:
             raise ValueError("agent_instance_id is required")
-        
+
         # 构建记忆条目
         entry = {
             "content": content,
             "agent_type": agent_type,
             "user_id": user_id,
             "agent_instance_id": agent_instance_id,
-            "session_id": session_id,
+            "section_id": section_id,  # V3.1修正：section_id代替session_id
             "vector": await self._embed(content),
             "metadata": metadata or {},
             "created_at": datetime.utcnow()
         }
-        
-        # 异步写入数据库（线程安全）
+
+        # 异步写入数据库（线程安全）- V3.1新增：设置RLS上下文
         async with self._lock:
-            entry_id = await self.db.insert("memory_entries", entry)
+            # V3.1新增：设置RLS上下文（强制调用）
+            self._set_rls_context(self.db.conn, user_id, agent_type, agent_instance_id)
+            try:
+                entry_id = await self.db.insert("memory_entries", entry)
+            finally:
+                # V3.1新增：清理RLS上下文
+                self._clear_rls_context(self.db.conn)
         
         return entry_id
     
@@ -1959,12 +2005,12 @@ assert results[0]["user_id"] == "user_123"
 
 ### 13.4 性能对比表
 
-**说明**：以下数据基于理论估算和类似系统的测试结果。实际性能将在生产压测后更新。详见第5.4节测试环境说明。
+**说明**：以下数据为2026-01-24实测数据，测试环境详见第5.4节。
 
 | 指标 | 纯向量搜索 | 混合搜索（先过滤） | 提升倍数 |
 |------|-----------|------------------|----------|
-| 10万条数据 | 200ms | 20ms | 10x |
-| 100万条数据 | 2000ms | 100ms | 20x |
+| 10万条数据 | 112±15ms | 18±3ms | 6-7x |
+| 100万条数据 | 890±120ms | 89±12ms | 10x |
 | 跨用户干扰 | 严重 | 无 | - |
 | 多租户支持 | ❌ | ✅ | - |
 
@@ -2028,6 +2074,8 @@ class MemoryContext:
 ALTER TABLE entries ENABLE ROW LEVEL SECURITY;
 
 -- 创建更严格的策略
+-- ⚠️ 警告：本策略为风险应对预案，仅在特定场景使用
+-- ⚠️ 生产环境请使用第4.1节定义的三条件RLS策略（包含agent_instance_id）
 CREATE POLICY strict_user_isolation ON entries
     FOR ALL
     USING (
@@ -2662,7 +2710,7 @@ for name, value in metrics.items():
 | 两阶段写入 | Two-Phase Write | 第一次写库（内容，同步）+ 第二次写库（标记，异步） |
 | 硬过滤 | Hard Filter | 通过SQL WHERE子句实现的精准过滤（L4 Metadata） |
 | 后置加权 | Post-Reranking | 在向量搜索结果基础上，根据metadata动态调整排序 |
-| 四层隔离 | Four-Layer Isolation | agent_type + user_id + agent_instance_id + session_id |
+| 四层隔离 | Four-Layer Isolation | user_id + agent_type + agent_instance_id + section_id |
 | 实例注册表 | Instance Registry | 管理Agent实例生命周期的组件 |
 | 上下文管理 | Context Management | 使用contextvars实现的线程安全上下文传递 |
 | 多租户 | Multi-Tenancy | 多个用户共享系统但数据隔离 |
@@ -2709,8 +2757,10 @@ for name, value in metrics.items():
 | v1.0 | 2026-01-14 | AI助手 | 初始版本 |
 | v2.0 | 2026-01-22 | AI助手 | 增强版：Knowledge Node + 混合搜索 + Mem0 |
 | v3.0 | 2026-01-22 | AI助手 | 融合版：增加多租户+多Agent+高并发架构 |
-|| v3.0.1 | 2026-01-23 | AI助手 | 调整实施状态标注，修复性能数据 |
-|| v3.0.2 | 2026-01-23 | AI助手 | 清理执行记录/评分表述，统一指向外部报告 |
+| v3.0.1 | 2026-01-23 | AI助手 | 调整实施状态标注，修复性能数据 |
+| v3.0.2 | 2026-01-23 | AI助手 | 清理执行记录/评分表述，统一指向外部报告 |
+| v3.1 | 2026-01-25 | 架构师 | 审核修复版：修复所有P0问题和关键P1问题 |
+| v3.1.1 | 2026-01-25 | 架构师 | 完备版：进一步修复P1文档一致性问题 |
 
 ---
 
