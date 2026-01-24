@@ -70,6 +70,21 @@ class EntryService:
     V3.0: Added four-layer isolation support and RLS context management.
     """
 
+    # 允许操作的列名白名单，防御 SQL 注入
+    ALLOWED_COLUMNS = {
+        "entry_id", "section_id", "user_id", "agent_type", "agent_instance_id",
+        "agent_id", "title", "summary_ai", "content", "scene_tags", "extra_meta",
+        "metadata_json", "space_type", "project_code", "parent_entry_id",
+        "section_version", "is_latest", "status", "created_at", "updated_at",
+        "importance", "usage_count", "last_seen_at", "source_session_id"
+    }
+
+    def _validate_columns(self, columns: List[str]) -> None:
+        """校验列名是否在白名单内。"""
+        for col in columns:
+            if col not in self.ALLOWED_COLUMNS:
+                raise ValueError(f"Invalid column name: {col}")
+
     def __init__(self, vector_client: Optional[VectorClient] = None) -> None:
         """初始化 EntryService。
 
@@ -178,6 +193,7 @@ class EntryService:
                     payload[key] = Json(payload[key])
 
             columns = [k for k in payload.keys()]
+            self._validate_columns(columns)  # V3.1.2: 安全校验
             placeholders = [f"%({k})s" for k in columns]
             sql = f"INSERT INTO entries ({', '.join(columns)}) VALUES ({', '.join(placeholders)}) RETURNING entry_id"
 
@@ -320,6 +336,9 @@ class EntryService:
 
             updates = []
             params = []
+
+            # V3.1.2: 统一白名单校验
+            self._validate_columns(list(kwargs.keys()))
 
             for key, value in kwargs.items():
                 if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id",
@@ -571,6 +590,7 @@ class EntryService:
             all_fields.update(payload.keys())
 
         columns = sorted(all_fields)
+        self._validate_columns(columns)  # V3.1.2: 安全校验
         placeholders = [f"%({k})s" for k in columns]
         sql = f"""
             INSERT INTO entries ({', '.join(columns)})
@@ -620,6 +640,9 @@ class EntryService:
             self.set_rls_context(user_id, agent_type or "", agent_instance_id or "", conn=conn)
             with conn.cursor() as cur:
                 for update_data in updates:
+                    # V3.1.2: 统一白名单校验
+                    self._validate_columns([k for k in update_data.keys() if k != "entry_id"])
+
                     entry_id = update_data.get("entry_id")
                     if not entry_id:
                         continue

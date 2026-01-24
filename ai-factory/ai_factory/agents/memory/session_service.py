@@ -108,14 +108,10 @@ class SessionService:
             if conn is None:
                 with connection_scope() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("RESET app.current_user_id")
-                        cur.execute("RESET app.current_agent_type")
-                        cur.execute("RESET app.current_agent_instance_id")
+                        cur.execute("RESET ALL")
             else:
                 with conn.cursor() as cur:
-                    cur.execute("RESET app.current_user_id")
-                    cur.execute("RESET app.current_agent_type")
-                    cur.execute("RESET app.current_agent_instance_id")
+                    cur.execute("RESET ALL")
 
             logger.debug("RLS context cleared")
         except Exception as e:

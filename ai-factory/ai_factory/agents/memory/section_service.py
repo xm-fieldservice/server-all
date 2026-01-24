@@ -226,7 +226,14 @@ class SectionService:
             
             try:
                 # 1. 获取会话的最近消息
-                messages = self._get_session_messages(session_id, limit=50, conn=conn)
+                messages = self._get_session_messages(
+                    session_id,
+                    limit=50,
+                    conn=conn,
+                    user_id=user_id,
+                    agent_type=agent_type,
+                    agent_instance_id=agent_instance_id
+                )
 
                 if not messages:
                     raise ValueError(f"Session {session_id} has no messages to summarize")
@@ -347,7 +354,13 @@ class SectionService:
             
             try:
                 # 1. 检查冷却时间窗
-                last_triggered_at = self._get_last_section_triggered_at(session_id, conn=conn, user_id=user_id)
+                last_triggered_at = self._get_last_section_triggered_at(
+                    session_id,
+                    conn=conn,
+                    user_id=user_id,
+                    agent_type=agent_type,
+                    agent_instance_id=agent_instance_id
+                )
                 if last_triggered_at:
                     now = datetime.now(last_triggered_at.tzinfo) if last_triggered_at.tzinfo else datetime.now()
                     time_since_trigger = (now - last_triggered_at).total_seconds()
@@ -356,15 +369,34 @@ class SectionService:
                         return None
 
                 # 2. 获取会话的消息总数和上次整理时间
-                message_count = self._get_session_message_count(session_id, conn=conn, user_id=user_id)
-                last_section_time = self._get_last_section_time(session_id, conn=conn, user_id=user_id)
+                message_count = self._get_session_message_count(
+                    session_id,
+                    conn=conn,
+                    user_id=user_id,
+                    agent_type=agent_type,
+                    agent_instance_id=agent_instance_id
+                )
+                last_section_time = self._get_last_section_time(
+                    session_id,
+                    conn=conn,
+                    user_id=user_id,
+                    agent_type=agent_type,
+                    agent_instance_id=agent_instance_id
+                )
 
                 # 3. 消息数量触发：基于"上次整理时间之后新增的消息数"判断
                 trigger_type = None
                 if message_count >= self.section_trigger_message_count:
                     if last_section_time:
                         # 获取上次整理时间之后新增的消息数
-                        new_message_count = self._get_session_message_count_since(session_id, last_section_time, conn=conn, user_id=user_id)
+                        new_message_count = self._get_session_message_count_since(
+                            session_id,
+                            last_section_time,
+                            conn=conn,
+                            user_id=user_id,
+                            agent_type=agent_type,
+                            agent_instance_id=agent_instance_id
+                        )
                         if new_message_count >= self.section_trigger_message_count:
                             logger.info(f"Message count trigger: {new_message_count} new messages >= {self.section_trigger_message_count}")
                             trigger_type = SectionTrigger.AUTO.value
@@ -390,7 +422,13 @@ class SectionService:
                 # 6. 如果满足触发条件，执行整理
                 if trigger_type:
                     # 更新触发时间（用于冷却时间窗）
-                    self._update_last_section_triggered_at(session_id, conn=conn, user_id=user_id)
+                    self._update_last_section_triggered_at(
+                        session_id,
+                        conn=conn,
+                        user_id=user_id,
+                        agent_type=agent_type,
+                        agent_instance_id=agent_instance_id
+                    )
 
                     # 如果启用异步整理，则入队任务
                     if self.enable_async_section_summarize:
@@ -637,7 +675,9 @@ class SectionService:
         session_id: str,
         limit: int = 50,
         conn = None,
-        user_id: Optional[str] = None
+        user_id: Optional[str] = None,
+        agent_type: Optional[str] = None,
+        agent_instance_id: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取会话的消息。
 
@@ -646,13 +686,15 @@ class SectionService:
             limit: 返回消息数量限制
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
 
         Returns:
             List[Dict[str, Any]]: 消息列表
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     SELECT message_id, role, msg_type, content, created_at
@@ -932,20 +974,29 @@ class SectionService:
             # 任务提交失败不影响主流程
             logger.warning(f"Failed to enqueue Memory0 task for {entry_id}: {e}")
 
-    def _get_session_message_count(self, session_id: str, conn=None, user_id=None) -> int:
+    def _get_session_message_count(
+        self,
+        session_id: str,
+        conn=None,
+        user_id=None,
+        agent_type=None,
+        agent_instance_id=None
+    ) -> int:
         """获取会话的消息数量。
 
         Args:
             session_id: 会话ID
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
 
         Returns:
             int: 消息数量
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*)
@@ -962,7 +1013,15 @@ class SectionService:
             with connection_scope() as conn:
                 return execute_query(conn)
 
-    def _get_session_message_count_since(self, session_id: str, since_time: datetime, conn=None, user_id=None) -> int:
+    def _get_session_message_count_since(
+        self,
+        session_id: str,
+        since_time: datetime,
+        conn=None,
+        user_id=None,
+        agent_type=None,
+        agent_instance_id=None
+    ) -> int:
         """获取会话在指定时间之后新增的消息数量。
 
         Args:
@@ -970,13 +1029,15 @@ class SectionService:
             since_time: 起始时间
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
 
         Returns:
             int: 新增的消息数量
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     SELECT COUNT(*)
@@ -993,20 +1054,29 @@ class SectionService:
             with connection_scope() as conn:
                 return execute_query(conn)
 
-    def _get_last_section_time(self, session_id: str, conn=None, user_id=None) -> Optional[datetime]:
+    def _get_last_section_time(
+        self,
+        session_id: str,
+        conn=None,
+        user_id=None,
+        agent_type=None,
+        agent_instance_id=None
+    ) -> Optional[datetime]:
         """获取会话上次 Section 整理的时间。
 
         Args:
             session_id: 会话ID
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
 
         Returns:
             Optional[datetime]: 上次整理时间，如果没有则返回 None
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     SELECT MAX(updated_at)
@@ -1023,20 +1093,29 @@ class SectionService:
             with connection_scope() as conn:
                 return execute_query(conn)
 
-    def _get_last_section_triggered_at(self, session_id: str, conn=None, user_id=None) -> Optional[datetime]:
+    def _get_last_section_triggered_at(
+        self,
+        session_id: str,
+        conn=None,
+        user_id=None,
+        agent_type=None,
+        agent_instance_id=None
+    ) -> Optional[datetime]:
         """获取会话上次触发 Section 整理的时间（用于冷却时间窗控制）。
 
         Args:
             session_id: 会话ID
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
 
         Returns:
             Optional[datetime]: 上次触发时间，如果没有则返回 None
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     SELECT last_section_triggered_at
@@ -1053,17 +1132,26 @@ class SectionService:
             with connection_scope() as conn:
                 return execute_query(conn)
 
-    def _update_last_section_triggered_at(self, session_id: str, conn=None, user_id=None) -> None:
+    def _update_last_section_triggered_at(
+        self,
+        session_id: str,
+        conn=None,
+        user_id=None,
+        agent_type=None,
+        agent_instance_id=None
+    ) -> None:
         """更新会话的 Section 触发时间（用于冷却时间窗控制）。
 
         Args:
             session_id: 会话ID
             conn: 数据库连接（可选）
             user_id: 用户ID（可选，用于RLS）
+            agent_type: Agent类型（可选）
+            agent_instance_id: Agent实例ID（可选）
         """
         def execute_query(connection):
             if user_id:
-                self.set_rls_context(user_id, conn=connection)
+                self.set_rls_context(user_id, agent_type, agent_instance_id, conn=connection)
             with connection.cursor() as cur:
                 cur.execute("""
                     UPDATE chat_sessions
