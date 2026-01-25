@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DB Explorer - 数据库浏览器</title>
+    <!-- 使用本地资源或轻量级 CDN 样式 -->
+    <!-- 使用外网 CDN，因为本地资产目录不存在 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #3b82f6;
+            --bg-color: #f8fafc;
+            --sidebar-bg: #ffffff;
+            --border-color: #e2e8f0;
+            --text-main: #1e293b;
+            --text-muted: #64748b;
+            --danger-color: #ef4444;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { 
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* 顶部横栏标签 */
+        header {
+            background: #1e293b;
+            color: white;
+            padding: 0 20px;
+            height: 60px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            z-index: 100;
+        }
+        .logo { font-weight: bold; margin-right: 40px; font-size: 1.2rem; color: #60a5fa; }
+        .nav-tabs { display: flex; gap: 10px; height: 100%; align-items: flex-end; }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            transition: all 0.2s;
+            font-size: 0.9rem;
+            color: #94a3b8;
+            border-bottom: 3px solid transparent;
+        }
+        .tab:hover { color: white; background: rgba(255,255,255,0.05); }
+        .tab.active {
+            color: white;
+            background: rgba(255,255,255,0.1);
+            border-bottom-color: var(--primary-color);
+        }
+
+        /* 主体布局 */
+        main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+            height: calc(100vh - 60px); /* 显式固定高度，确保内部 flex/overflow 生效 */
+        }
+
+        /* 左侧列表区 */
+        #list-container {
+            width: 400px;
+            background: var(--sidebar-bg);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+        .list-header {
+            padding: 15px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fff;
+        }
+        .list-header h2 { font-size: 1rem; }
+        .refresh-btn {
+            background: none;
+            border: 1px solid var(--border-color);
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+        .refresh-btn:hover { background: #f1f5f9; }
+
+        .record-list {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .record-item {
+            padding: 12px 15px;
+            border-bottom: 1px solid #f1f5f9;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .record-item:hover { background: #f8fafc; }
+        .record-item.active { background: #eff6ff; border-left: 4px solid var(--primary-color); }
+        .record-id { font-family: monospace; font-size: 0.8rem; color: var(--primary-color); margin-bottom: 4px; }
+        .record-preview { font-size: 0.85rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .record-time { font-size: 0.7rem; color: #94a3b8; margin-top: 4px; }
+
+        /* 右侧详情区 */
+        #detail-container {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto; /* 确保容器自身可滚动 */
+            background: #fff;
+            position: relative;
+            height: 100%; /* 撑满父容器 */
+        }
+        .detail-card {
+            background: #fff;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            margin-bottom: 20px; /* 底部留白 */
+        }
+        .detail-header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .detail-header h3 { font-size: 1.1rem; }
+        .delete-btn {
+            background: var(--danger-color);
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .delete-btn:hover { background: #dc2626; }
+
+        .detail-body {
+            padding: 20px;
+        }
+        .field-row {
+            display: flex;
+            padding: 10px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .field-label { width: 180px; font-weight: 600; color: var(--text-muted); font-size: 0.85rem; }
+        .field-value { 
+            flex: 1; 
+            font-size: 0.9rem; 
+            word-break: break-all; 
+            white-space: pre-wrap; 
+            color: #334155;
+            line-height: 1.5;
+        }
+        .json-block {
+            background: #f8fafc;
+            padding: 10px;
+            border-radius: 4px;
+            border: 1px solid #e2e8f0;
+            font-family: monospace;
+            font-size: 0.85rem;
+            color: #475569;
+        }
+
+        /* 状态显示 */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: #94a3b8;
+        }
+        .empty-state i { font-size: 3rem; margin-bottom: 15px; }
+
+        .loading-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 50;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="logo">DB Explorer</div>
+        <div class="nav-tabs" id="table-tabs">
+            <!-- 动态加载核心表 -->
+        </div>
+    </header>
+
+    <main>
+        <div id="list-container">
+            <div class="list-header">
+                <h2 id="current-table-title">选择表</h2>
+                <button class="refresh-btn" onclick="refreshData()">刷新数据</button>
+            </div>
+            <div class="record-list" id="record-list">
+                <div class="empty-state">请先选择一个数据表</div>
+            </div>
+        </div>
+
+        <div id="detail-container">
+            <div class="loading-overlay" id="loading">加载中...</div>
+            <div id="detail-content" class="empty-state">
+                <i>📭</i>
+                <p>点击左侧列表查看记录详情</p>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // 使用相对路径，这样无论通过哪个端口访问都能正确匹配后端
+        const API_BASE = "/api/db";
+        let currentTable = "";
+        let currentRecords = [];
+        let selectedRecordId = null;
+
+        // 核心表定义 (同步后端)
+        const CORE_TABLES = [
+            "chat_sessions",
+            "chat_messages",
+            "chat_sections",
+            "entries",
+            "qa_query_index",
+            "memory_tasks"
+        ];
+
+        // 初始化标签
+        function initTabs() {
+            const container = document.getElementById('table-tabs');
+            CORE_TABLES.forEach(table => {
+                const tab = document.createElement('div');
+                tab.className = 'tab';
+                tab.textContent = table;
+                tab.onclick = () => switchTable(table, tab);
+                container.appendChild(tab);
+            });
+        }
+
+        async function switchTable(tableName, element) {
+            currentTable = tableName;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            element.classList.add('active');
+            document.getElementById('current-table-title').textContent = tableName;
+            
+            await refreshData();
+        }
+
+        async function refreshData() {
+            if (!currentTable) return;
+            
+            showLoading(true);
+            try {
+                const response = await fetch(`${API_BASE}/tables/${currentTable}/data?limit=50`);
+                const result = await response.json();
+                currentRecords = result.data;
+                renderList(currentRecords);
+                // 重置详情区并恢复 empty-state
+                const detailContent = document.getElementById('detail-content');
+                detailContent.classList.add('empty-state');
+                detailContent.innerHTML = `
+                    <div class="empty-state">
+                        <i>📭</i>
+                        <p>点击左侧列表查看记录详情</p>
+                    </div>
+                `;
+            } catch (err) {
+                alert("加载数据失败: " + err);
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function renderList(records) {
+            const listContainer = document.getElementById('record-list');
+            if (records.length === 0) {
+                listContainer.innerHTML = '<div class="empty-state">暂无数据</div>';
+                return;
+            }
+
+            // 获取主键名
+            const pk = getPK(currentTable);
+
+            listContainer.innerHTML = records.map(reg => {
+                const id = reg[pk];
+                const content = reg.content || reg.title || reg.name || JSON.stringify(reg).substring(0, 100);
+                const time = reg.created_at ? new Date(reg.created_at).toLocaleString() : '';
+
+                return `
+                    <div class="record-item" onclick="showDetail('${id}')" id="item-${id}">
+                        <div class="record-id">${id}</div>
+                        <div class="record-preview">${content}</div>
+                        <div class="record-time">${time}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function getPK(table) {
+            const pk_map = {
+                "chat_sessions": "session_id",
+                "chat_messages": "message_id",
+                "chat_sections": "section_id",
+                "entries": "entry_id",
+                "qa_query_index": "qa_id",
+                "memory_tasks": "task_id"
+            };
+            return pk_map[table] || "id";
+        }
+
+        function showDetail(id) {
+            selectedRecordId = id;
+            const record = currentRecords.find(r => r[getPK(currentTable)] == id);
+            
+            // 激活样式
+            document.querySelectorAll('.record-item').forEach(i => i.classList.remove('active'));
+            document.getElementById(`item-${id}`).classList.add('active');
+
+            const detailContainer = document.getElementById('detail-content');
+            // 移除 empty-state 类，避免 flex 居中导致顶部截断
+            detailContainer.classList.remove('empty-state');
+            detailContainer.style.display = 'block'; 
+            detailContainer.style.textAlign = 'left';
+
+            const fieldsHtml = Object.entries(record).map(([key, value]) => {
+                let displayValue = value;
+                if (typeof value === 'object' && value !== null) {
+                    displayValue = `<div class="json-block">${JSON.stringify(value, null, 2)}</div>`;
+                }
+                return `
+                    <div class="field-row">
+                        <div class="field-label">${key}</div>
+                        <div class="field-value">${displayValue}</div>
+                    </div>
+                `;
+            }).join('');
+
+            detailContainer.innerHTML = `
+                <div class="detail-card">
+                    <div class="detail-header">
+                        <h3>记录详情</h3>
+                        <button class="delete-btn" onclick="confirmDelete('${id}')">删除记录</button>
+                    </div>
+                    <div class="detail-body">
+                        ${fieldsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        async function confirmDelete(id) {
+            if (!confirm(`确定要永久删除这条记录吗？(ID: ${id})`)) return;
+
+            try {
+                const response = await fetch(`${API_BASE}/tables/${currentTable}/records/${id}`, {
+                    method: 'DELETE'
+                });
+                const result = await response.json();
+                if (result.status === "success") {
+                    alert("删除成功");
+                    refreshData();
+                } else {
+                    alert("删除失败: " + result.detail);
+                }
+            } catch (err) {
+                alert("请求出错: " + err);
+            }
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'flex' : 'none';
+        }
+
+        // 启动
+        initTabs();
+    </script>
+</body>
+</html>

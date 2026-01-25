@@ -63,7 +63,7 @@
         const { useState, useEffect, useRef } = React;
 
         // API基础URL配置 - 可修改为实际的后端API地址
-        const API_BASE_URL = localStorage.getItem('api_base_url') || 'http://localhost:8001/api/memory';
+        const API_BASE_URL = localStorage.getItem('api_base_url') || '/api/memory';
 
         // API服务（扩展版）
         const apiService = {
@@ -727,7 +727,7 @@
                                 </h1>
                                 <button
                                     onClick={() => {
-                                        const newUrl = prompt('请输入后端API地址（例如：http://localhost:8001/api/memory）:', API_BASE_URL);
+                                        const newUrl = prompt('请输入后端API地址（例如：/api/memory）:', API_BASE_URL);
                                         if (newUrl && newUrl !== API_BASE_URL) {
                                             localStorage.setItem('api_base_url', newUrl);
                                             window.location.reload();
@@ -885,6 +885,15 @@
                                 <div className="bg-white rounded-lg shadow p-3 flex-shrink-0">
                                     <h3 className="text-md font-bold mb-2 text-sm">快速开始</h3>
                                     <div className="space-y-2">
+                                        <button
+                                            onClick={() => {
+                                                window.location.href = '/db_explorer.html';
+                                            }}
+                                            className="w-full bg-indigo-600 text-white py-2 rounded hover:bg-indigo-700 text-sm font-bold"
+                                        >
+                                            <i className="fas fa-database mr-2"></i>
+                                            打开 DB 浏览器
+                                        </button>
                                         <button
                                             onClick={async () => {
                                                 console.log('[DEBUG] 手动测试API连接...');
