@@ -6,6 +6,7 @@ Agent记忆系统调试API服务 - 集成 DB Explorer
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime
@@ -49,6 +50,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 挂载静态资源目录
+assets_path = os.path.join(os.path.dirname(__file__), "assets")
+if os.path.exists(assets_path):
+    app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
 
 # === DB Explorer 逻辑集成 ===
 CORE_TABLES = ["chat_sessions", "chat_messages", "chat_sections", "entries", "qa_query_index", "memory_tasks"]
@@ -112,6 +118,8 @@ async def delete_db_record(table_name: str, record_id: str, user_id: str = "user
     try:
         with conn.cursor() as cur:
             cur.execute("SELECT set_config('app.current_user_id', %s, true)", (user_id,))
+            cur.execute("SELECT set_config('app.current_agent_type', '', true)")
+            cur.execute("SELECT set_config('app.current_agent_instance_id', '', true)")
             cur.execute(f"DELETE FROM {table_name} WHERE {actual_pk} = %s", (record_id,))
             conn.commit()
             return {"status": "success"}

@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DB Explorer - 数据库浏览器</title>
-    <!-- 使用本地资源或轻量级 CDN 样式 -->
-    <!-- 使用外网 CDN，因为本地资产目录不存在 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
         :root {
@@ -29,7 +27,6 @@
             overflow: hidden;
         }
 
-        /* 顶部横栏标签 */
         header {
             background: #1e293b;
             color: white;
@@ -41,62 +38,53 @@
             z-index: 100;
         }
         .logo { font-weight: bold; margin-right: 40px; font-size: 1.2rem; color: #60a5fa; }
-        .nav-tabs { display: flex; gap: 10px; height: 100%; align-items: flex-end; }
-        .tab {
-            padding: 10px 20px;
-            cursor: pointer;
-            border-radius: 6px 6px 0 0;
-            transition: all 0.2s;
-            font-size: 0.9rem;
-            color: #94a3b8;
-            border-bottom: 3px solid transparent;
-        }
-        .tab:hover { color: white; background: rgba(255,255,255,0.05); }
-        .tab.active {
-            color: white;
-            background: rgba(255,255,255,0.1);
-            border-bottom-color: var(--primary-color);
-        }
 
-        /* 主体布局 */
         main {
             display: flex;
             flex: 1;
             overflow: hidden;
-            height: calc(100vh - 60px); /* 显式固定高度，确保内部 flex/overflow 生效 */
+            height: calc(100vh - 60px);
         }
 
-        /* 左侧列表区 */
-        #list-container {
-            width: 400px;
-            background: var(--sidebar-bg);
+        /* 三栏布局容器 */
+        .column {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
             border-right: 1px solid var(--border-color);
+            background: var(--sidebar-bg);
+        }
+
+        #session-list-col { width: 350px; }
+        #message-list-col { width: 350px; border-right: none; border-left: 1px solid var(--border-color); }
+        
+        #detail-col { 
+            flex: 1; 
+            background: var(--bg-color);
+            overflow-y: auto;
+            padding: 0;
             display: flex;
             flex-direction: column;
         }
-        .list-header {
+
+        .col-header {
             padding: 15px;
             border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
             background: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 10;
         }
-        .list-header h2 { font-size: 1rem; }
-        .refresh-btn {
-            background: none;
-            border: 1px solid var(--border-color);
-            padding: 5px 10px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.8rem;
-        }
-        .refresh-btn:hover { background: #f1f5f9; }
+        .col-header h2 { font-size: 1rem; }
 
-        .record-list {
+        .list-container {
             flex: 1;
             overflow-y: auto;
         }
+
         .record-item {
             padding: 12px 15px;
             border-bottom: 1px solid #f1f5f9;
@@ -105,290 +93,357 @@
         }
         .record-item:hover { background: #f8fafc; }
         .record-item.active { background: #eff6ff; border-left: 4px solid var(--primary-color); }
-        .record-id { font-family: monospace; font-size: 0.8rem; color: var(--primary-color); margin-bottom: 4px; }
+        .record-id { font-family: monospace; font-size: 0.8rem; color: var(--primary-color); margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; }
         .record-preview { font-size: 0.85rem; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .record-time { font-size: 0.7rem; color: #94a3b8; margin-top: 4px; }
 
-        /* 右侧详情区 */
-        #detail-container {
+        /* 中间栏详情样式 */
+        .detail-section {
             flex: 1;
-            padding: 20px;
-            overflow-y: auto; /* 确保容器自身可滚动 */
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 200px;
+            border-bottom: 4px solid var(--border-color);
             background: #fff;
-            position: relative;
-            height: 100%; /* 撑满父容器 */
         }
+        .detail-section:last-child { border-bottom: none; }
+        
+        .detail-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+
         .detail-card {
             background: #fff;
             border: 1px solid var(--border-color);
             border-radius: 8px;
-            padding: 0;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-            margin-bottom: 20px; /* 底部留白 */
         }
         .detail-header {
-            padding: 15px 20px;
+            padding: 12px 20px;
             border-bottom: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background: #f8fafc;
         }
-        .detail-header h3 { font-size: 1.1rem; }
+        .detail-header h3 { font-size: 0.95rem; color: var(--text-main); }
+        
+        .field-row {
+            display: flex;
+            padding: 8px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .field-label { width: 140px; font-weight: 600; color: var(--text-muted); font-size: 0.8rem; flex-shrink: 0; }
+        .field-value { 
+            flex: 1; 
+            font-size: 0.85rem; 
+            word-break: break-all; 
+            white-space: pre-wrap; 
+            color: #334155;
+            line-height: 1.4;
+        }
+        .json-block {
+            background: #f1f5f9;
+            padding: 8px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+
+        .refresh-btn {
+            background: none;
+            border: 1px solid var(--border-color);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.75rem;
+        }
+        .refresh-btn:hover { background: #f1f5f9; }
+
         .delete-btn {
             background: var(--danger-color);
             color: white;
             border: none;
-            padding: 8px 15px;
+            padding: 4px 10px;
             border-radius: 4px;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: 0.75rem;
         }
-        .delete-btn:hover { background: #dc2626; }
 
-        .detail-body {
-            padding: 20px;
-        }
-        .field-row {
-            display: flex;
-            padding: 10px 0;
-            border-bottom: 1px solid #f1f5f9;
-        }
-        .field-label { width: 180px; font-weight: 600; color: var(--text-muted); font-size: 0.85rem; }
-        .field-value { 
-            flex: 1; 
-            font-size: 0.9rem; 
-            word-break: break-all; 
-            white-space: pre-wrap; 
-            color: #334155;
-            line-height: 1.5;
-        }
-        .json-block {
-            background: #f8fafc;
-            padding: 10px;
+        .copy-btn {
+            background: #10b981; /* 绿色 */
+            color: white;
+            border: none;
+            padding: 4px 10px;
             border-radius: 4px;
-            border: 1px solid #e2e8f0;
-            font-family: monospace;
-            font-size: 0.85rem;
-            color: #475569;
+            cursor: pointer;
+            font-size: 0.75rem;
+            margin-right: 8px;
         }
+        .copy-btn:hover { background: #059669; }
 
-        /* 状态显示 */
-        .empty-state {
+        .empty-placeholder {
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             height: 100%;
             color: #94a3b8;
+            font-size: 0.9rem;
         }
-        .empty-state i { font-size: 3rem; margin-bottom: 15px; }
 
         .loading-overlay {
             position: absolute;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(255,255,255,0.7);
-            display: flex;
+            background: rgba(255,255,255,0.6);
+            display: none;
             align-items: center;
             justify-content: center;
-            z-index: 50;
-            display: none;
+            z-index: 100;
         }
     </style>
 </head>
 <body>
 
     <header>
-        <div class="logo">DB Explorer</div>
-        <div class="nav-tabs" id="table-tabs">
-            <!-- 动态加载核心表 -->
-        </div>
+        <div class="logo">DB Explorer - 会话消息联动视图</div>
     </header>
 
     <main>
-        <div id="list-container">
-            <div class="list-header">
-                <h2 id="current-table-title">选择表</h2>
-                <button class="refresh-btn" onclick="refreshData()">刷新数据</button>
+        <!-- 左侧：会话列表 -->
+        <div class="column" id="session-list-col">
+            <div class="col-header">
+                <h2>chat_sessions</h2>
+                <button class="refresh-btn" onclick="loadSessions()">刷新数据</button>
             </div>
-            <div class="record-list" id="record-list">
-                <div class="empty-state">请先选择一个数据表</div>
+            <div class="list-container" id="session-list">
+                <div class="empty-placeholder">加载中...</div>
             </div>
         </div>
 
-        <div id="detail-container">
-            <div class="loading-overlay" id="loading">加载中...</div>
-            <div id="detail-content" class="empty-state">
-                <i>📭</i>
-                <p>点击左侧列表查看记录详情</p>
+        <!-- 中间：详情区（自适应） -->
+        <div id="detail-col">
+            <!-- 上部：Session 详情 -->
+            <div class="detail-section" id="session-detail-section">
+                <div class="col-header">
+                    <h2>Session 详情</h2>
+                </div>
+                <div class="detail-scroll" id="session-detail-content">
+                    <div class="empty-placeholder">选择左侧会话查看详情</div>
+                </div>
+            </div>
+            <!-- 下部：Message 详情 -->
+            <div class="detail-section" id="message-detail-section">
+                <div class="col-header">
+                    <h2>Message 详情</h2>
+                </div>
+                <div class="detail-scroll" id="message-detail-content">
+                    <div class="empty-placeholder">选择右侧消息查看详情</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：消息列表 -->
+        <div class="column" id="message-list-col">
+            <div class="col-header">
+                <h2>chat_messages</h2>
+                <button class="refresh-btn" id="msg-refresh-btn" disabled>刷新</button>
+            </div>
+            <div class="list-container" id="message-list">
+                <div class="empty-placeholder">请先选择会话</div>
             </div>
         </div>
     </main>
 
     <script>
-        // 使用相对路径，这样无论通过哪个端口访问都能正确匹配后端
         const API_BASE = "/api/db";
-        let currentTable = "";
-        let currentRecords = [];
-        let selectedRecordId = null;
+        let allSessions = [];
+        let currentMessages = [];
+        let selectedSessionId = null;
+        let selectedMessageId = null;
 
-        // 核心表定义 (同步后端)
-        const CORE_TABLES = [
-            "chat_sessions",
-            "chat_messages",
-            "chat_sections",
-            "entries",
-            "qa_query_index",
-            "memory_tasks"
-        ];
-
-        // 初始化标签
-        function initTabs() {
-            const container = document.getElementById('table-tabs');
-            CORE_TABLES.forEach(table => {
-                const tab = document.createElement('div');
-                tab.className = 'tab';
-                tab.textContent = table;
-                tab.onclick = () => switchTable(table, tab);
-                container.appendChild(tab);
-            });
-        }
-
-        async function switchTable(tableName, element) {
-            currentTable = tableName;
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            element.classList.add('active');
-            document.getElementById('current-table-title').textContent = tableName;
-            
-            await refreshData();
-        }
-
-        async function refreshData() {
-            if (!currentTable) return;
-            
-            showLoading(true);
+        // 加载会话列表
+        async function loadSessions() {
+            const container = document.getElementById('session-list');
+            container.innerHTML = '<div class="empty-placeholder">加载中...</div>';
             try {
-                const response = await fetch(`${API_BASE}/tables/${currentTable}/data?limit=50`);
-                const result = await response.json();
-                currentRecords = result.data;
-                renderList(currentRecords);
-                // 重置详情区并恢复 empty-state
-                const detailContent = document.getElementById('detail-content');
-                detailContent.classList.add('empty-state');
-                detailContent.innerHTML = `
-                    <div class="empty-state">
-                        <i>📭</i>
-                        <p>点击左侧列表查看记录详情</p>
-                    </div>
-                `;
-            } catch (err) {
-                alert("加载数据失败: " + err);
-            } finally {
-                showLoading(false);
+                const res = await fetch(`${API_BASE}/tables/chat_sessions/data?limit=100`);
+                const result = await res.json();
+                allSessions = result.data || [];
+                renderSessionList();
+            } catch (e) {
+                container.innerHTML = `<div class="empty-placeholder" style="color:red">加载失败: ${e.message}</div>`;
             }
         }
 
-        function renderList(records) {
-            const listContainer = document.getElementById('record-list');
-            if (records.length === 0) {
-                listContainer.innerHTML = '<div class="empty-state">暂无数据</div>';
+        function renderSessionList() {
+            const container = document.getElementById('session-list');
+            if (allSessions.length === 0) {
+                container.innerHTML = '<div class="empty-placeholder">暂无会话</div>';
                 return;
             }
-
-            // 获取主键名
-            const pk = getPK(currentTable);
-
-            listContainer.innerHTML = records.map(reg => {
-                const id = reg[pk];
-                const content = reg.content || reg.title || reg.name || JSON.stringify(reg).substring(0, 100);
-                const time = reg.created_at ? new Date(reg.created_at).toLocaleString() : '';
-
-                return `
-                    <div class="record-item" onclick="showDetail('${id}')" id="item-${id}">
-                        <div class="record-id">${id}</div>
-                        <div class="record-preview">${content}</div>
-                        <div class="record-time">${time}</div>
-                    </div>
-                `;
-            }).join('');
+            container.innerHTML = allSessions.map(s => `
+                <div class="record-item ${selectedSessionId === s.session_id ? 'active' : ''}" onclick="selectSession('${s.session_id}')">
+                    <div class="record-id">${s.session_id}</div>
+                    <div class="record-preview">${s.title || '(无标题)'}</div>
+                    <div class="record-time">${s.created_at ? new Date(s.created_at).toLocaleString() : ''}</div>
+                </div>
+            `).join('');
         }
 
-        function getPK(table) {
-            const pk_map = {
-                "chat_sessions": "session_id",
-                "chat_messages": "message_id",
-                "chat_sections": "section_id",
-                "entries": "entry_id",
-                "qa_query_index": "qa_id",
-                "memory_tasks": "task_id"
-            };
-            return pk_map[table] || "id";
-        }
-
-        function showDetail(id) {
-            selectedRecordId = id;
-            const record = currentRecords.find(r => r[getPK(currentTable)] == id);
+        async function selectSession(sessionId) {
+            selectedSessionId = sessionId;
+            renderSessionList();
             
-            // 激活样式
-            document.querySelectorAll('.record-item').forEach(i => i.classList.remove('active'));
-            document.getElementById(`item-${id}`).classList.add('active');
+            // 1. 显示 Session 详情
+            const session = allSessions.find(s => s.session_id === sessionId);
+            renderDetail('session-detail-content', session, 'chat_sessions', sessionId);
 
-            const detailContainer = document.getElementById('detail-content');
-            // 移除 empty-state 类，避免 flex 居中导致顶部截断
-            detailContainer.classList.remove('empty-state');
-            detailContainer.style.display = 'block'; 
-            detailContainer.style.textAlign = 'left';
+            // 2. 加载消息列表
+            loadMessages(sessionId);
+            
+            // 3. 清空消息详情
+            document.getElementById('message-detail-content').innerHTML = '<div class="empty-placeholder">选择右侧消息查看详情</div>';
+        }
 
-            const fieldsHtml = Object.entries(record).map(([key, value]) => {
-                let displayValue = value;
-                if (typeof value === 'object' && value !== null) {
-                    displayValue = `<div class="json-block">${JSON.stringify(value, null, 2)}</div>`;
-                }
-                return `
-                    <div class="field-row">
-                        <div class="field-label">${key}</div>
-                        <div class="field-value">${displayValue}</div>
-                    </div>
-                `;
-            }).join('');
+        async function loadMessages(sessionId) {
+            const container = document.getElementById('message-list');
+            container.innerHTML = '<div class="empty-placeholder">加载消息中...</div>';
+            const refreshBtn = document.getElementById('msg-refresh-btn');
+            refreshBtn.disabled = false;
+            refreshBtn.onclick = () => loadMessages(sessionId);
 
-            detailContainer.innerHTML = `
+            try {
+                // 注意：这里需要后端支持过滤 session_id，目前的通用接口可能只是按时间排。
+                // 如果后端 get_table_data 不支持过滤，这里会显示所有消息，我们需要在前端过滤。
+                const res = await fetch(`${API_BASE}/tables/chat_messages/data?limit=200`);
+                const result = await res.json();
+                // 前端过滤属于该 session 的消息
+                currentMessages = (result.data || []).filter(m => m.session_id === sessionId);
+                renderMessageList();
+            } catch (e) {
+                container.innerHTML = `<div class="empty-placeholder" style="color:red">加载失败</div>`;
+            }
+        }
+
+        function renderMessageList() {
+            const container = document.getElementById('message-list');
+            if (currentMessages.length === 0) {
+                container.innerHTML = '<div class="empty-placeholder">该会话暂无消息</div>';
+                return;
+            }
+            container.innerHTML = currentMessages.map(m => `
+                <div class="record-item ${selectedMessageId === m.message_id ? 'active' : ''}" onclick="selectMessage('${m.message_id}')">
+                    <div class="record-id">${m.message_id}</div>
+                    <div class="record-preview">[${m.role}] ${m.content}</div>
+                    <div class="record-time">${m.created_at ? new Date(m.created_at).toLocaleString() : ''}</div>
+                </div>
+            `).join('');
+        }
+
+        function selectMessage(messageId) {
+            selectedMessageId = messageId;
+            renderMessageList();
+            const msg = currentMessages.find(m => m.message_id === messageId);
+            renderDetail('message-detail-content', msg, 'chat_messages', messageId);
+        }
+
+        function renderDetail(targetId, data, tableName, id) {
+            const container = document.getElementById(targetId);
+            if (!data) return;
+
+            const copyBtnHtml = (data.content || data.summary_content) 
+                ? `<button class="copy-btn" onclick="copyContent('${targetId}')">复制内容</button>` 
+                : '';
+
+            const fieldsHtml = Object.entries(data)
+                .sort(([ka], [kb]) => {
+                    if (ka === 'content') return 1;
+                    if (kb === 'content') return -1;
+                    return 0;
+                })
+                .map(([key, value]) => {
+                    let displayValue = value;
+                    if (typeof value === 'object' && value !== null) {
+                        displayValue = `<div class="json-block">${JSON.stringify(value, null, 2)}</div>`;
+                    }
+                    return `
+                        <div class="field-row">
+                            <div class="field-label">${key}</div>
+                            <div class="field-value">${displayValue}</div>
+                        </div>
+                    `;
+                }).join('');
+
+            container.innerHTML = `
                 <div class="detail-card">
                     <div class="detail-header">
-                        <h3>记录详情</h3>
-                        <button class="delete-btn" onclick="confirmDelete('${id}')">删除记录</button>
+                        <h3>${tableName} 详情</h3>
+                        <div>
+                            ${copyBtnHtml}
+                            <button class="delete-btn" onclick="confirmDelete('${tableName}', '${id}')">删除</button>
+                        </div>
                     </div>
-                    <div class="detail-body">
+                    <div style="padding: 15px;">
                         ${fieldsHtml}
                     </div>
                 </div>
             `;
         }
 
-        async function confirmDelete(id) {
-            if (!confirm(`确定要永久删除这条记录吗？(ID: ${id})`)) return;
-
-            try {
-                const response = await fetch(`${API_BASE}/tables/${currentTable}/records/${id}`, {
-                    method: 'DELETE'
-                });
-                const result = await response.json();
-                if (result.status === "success") {
-                    alert("删除成功");
-                    refreshData();
-                } else {
-                    alert("删除失败: " + result.detail);
-                }
-            } catch (err) {
-                alert("请求出错: " + err);
+        function copyContent(targetId) {
+            // 从当前渲染的数据中找到 content
+            let data = null;
+            if (targetId === 'session-detail-content') {
+                data = allSessions.find(s => s.session_id === selectedSessionId);
+            } else {
+                data = currentMessages.find(m => m.message_id === selectedMessageId);
             }
+
+            const textToCopy = data ? (data.content || data.summary_content || "") : "";
+            if (!textToCopy) {
+                alert("没有可复制的内容");
+                return;
+            }
+
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                const btn = document.querySelector(`#${targetId} .copy-btn`);
+                const oldText = btn.textContent;
+                btn.textContent = "已复制!";
+                btn.style.background = "#059669";
+                setTimeout(() => {
+                    btn.textContent = oldText;
+                    btn.style.background = "#10b981";
+                }, 2000);
+            }).catch(err => {
+                alert("复制失败: " + err);
+            });
         }
 
-        function showLoading(show) {
-            document.getElementById('loading').style.display = show ? 'flex' : 'none';
+        async function confirmDelete(tableName, id) {
+            if (!confirm(`确定删除吗？ID: ${id}`)) return;
+            try {
+                const res = await fetch(`${API_BASE}/tables/${tableName}/records/${id}`, { method: 'DELETE' });
+                const result = await res.json();
+                if (result.status === 'success') {
+                    alert('删除成功');
+                    if (tableName === 'chat_sessions') {
+                        loadSessions();
+                        document.getElementById('session-detail-content').innerHTML = '<div class="empty-placeholder">会话已删除</div>';
+                        document.getElementById('message-list').innerHTML = '<div class="empty-placeholder">请选择会话</div>';
+                    } else {
+                        loadMessages(selectedSessionId);
+                        document.getElementById('message-detail-content').innerHTML = '<div class="empty-placeholder">消息已删除</div>';
+                    }
+                }
+            } catch (e) { alert('删除失败'); }
         }
 
-        // 启动
-        initTabs();
+        // 启动加载
+        loadSessions();
     </script>
 </body>
 </html>
