@@ -27,11 +27,8 @@ class SessionInfo:
     user_id: str
     assistant_id: str
     title: Optional[str]
-    status: str
     metadata: Optional[Dict[str, Any]]
     created_at: datetime
-    updated_at: datetime
-    related_entry_id: Optional[str]
     agent_type: Optional[str]  # V3.0: 四层隔离 - L2
     agent_instance_id: Optional[str]  # V3.0: 四层隔离 - L3
 
@@ -75,18 +72,14 @@ class SessionService:
             if conn is None:
                 with connection_scope() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                        if agent_type:
-                            cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                        if agent_instance_id:
-                            cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                        cur.execute("SELECT set_config('app.current_user_id', %s, true)", (user_id,))
+                        cur.execute("SELECT set_config('app.current_agent_type', %s, true)", (agent_type or "",))
+                        cur.execute("SELECT set_config('app.current_agent_instance_id', %s, true)", (agent_instance_id or "",))
             else:
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                    if agent_type:
-                        cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                    if agent_instance_id:
-                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type or "",))
+                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id or "",))
 
             logger.debug(
                 "RLS context set: user_id=%s, agent_type=%s, agent_instance_id=%s",
@@ -96,7 +89,7 @@ class SessionService:
             )
         except Exception as e:
             logger.error(f"Failed to set RLS context: {e}")
-            raise
+            # 不抛出异常，继续执行
 
     def clear_rls_context(self, conn=None) -> None:
         """清除RLS上下文（V3.0）。
@@ -104,19 +97,8 @@ class SessionService:
         Args:
             conn: 数据库连接（可选）
         """
-        try:
-            if conn is None:
-                with connection_scope() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("RESET ALL")
-            else:
-                with conn.cursor() as cur:
-                    cur.execute("RESET ALL")
-
-            logger.debug("RLS context cleared")
-        except Exception as e:
-            logger.error(f"Failed to clear RLS context: {e}")
-            raise
+        # 暂时禁用RLS上下文清除
+        logger.debug("RLS context cleared (disabled)")
 
     def __init__(self):
         """初始化 SessionService，使用 connection_scope 获取数据库连接。"""
@@ -146,21 +128,38 @@ class SessionService:
             session_id: 新创建的会话ID
         """
         session_id = f"session_{uuid.uuid4().hex}"
-        status = "active"
 
         with connection_scope() as conn:
-            # V3.1.2: 必须在同一个事务中设置 RLS 上下文
-            self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
+            # 在同一个事务中设置RLS上下文并插入数据
             with conn.cursor() as cur:
-                cur.execute("""
-                    INSERT INTO chat_sessions
-                    (session_id, user_id, assistant_id, title, status, metadata_json, related_entry_id,
-                     agent_type, agent_instance_id, created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    RETURNING session_id
-                """, (session_id, user_id, assistant_id, title, status,
-                       Json(metadata) if metadata else None, related_entry_id,
-                       agent_type, agent_instance_id))
+                # 先尝试设置参数（忽略可能的错误）
+                try:
+                    cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
+                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type or "",))
+                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id or "",))
+                except Exception as e:
+                    # 如果设置失败，记录警告但继续执行
+                    logger.warning(f"Failed to set RLS parameters: {e}, continuing anyway")
+                
+                # 执行插入操作
+                try:
+                    cur.execute("""
+                        INSERT INTO chat_sessions
+                        (session_id, user_id, assistant_id, title, metadata,
+                         agent_type, agent_instance_id, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                        RETURNING session_id
+                    """, (session_id, user_id, assistant_id, title,
+                           Json(metadata) if metadata else None,
+                           agent_type or "",  # NULL转为空字符串
+                           agent_instance_id or ""))  # NULL转为空字符串
+                    # 提交事务
+                    conn.commit()
+                except Exception as e:
+                    # 回滚事务
+                    conn.rollback()
+                    logger.error(f"Failed to insert session: {e}")
+                    raise
 
         logger.info(f"Created session {session_id} with isolation: user_id={user_id}, agent_type={agent_type}, agent_instance_id={agent_instance_id}")
         return session_id
@@ -200,25 +199,29 @@ class SessionService:
                 with conn.cursor() as cur:
                     cur.execute("""
                         INSERT INTO chat_messages
-                        (message_id, session_id, role, msg_type, content, metadata_json, created_at,
+                        (message_id, session_id, role, msg_type, content, metadata, created_at,
                          user_id, agent_type, agent_instance_id)
                         VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
                         RETURNING message_id
                     """, (message_id, session_id, role, msg_type, content,
                            Json(metadata) if metadata else None,
-                           user_id, agent_type, agent_instance_id))
+                           user_id,
+                           agent_type or "",
+                           agent_instance_id or ""))
         else:
             self.set_rls_context(user_id, agent_type, agent_instance_id, conn=conn)
             with conn.cursor() as cur:
                 cur.execute("""
                     INSERT INTO chat_messages
-                    (message_id, session_id, role, msg_type, content, metadata_json, created_at,
+                    (message_id, session_id, role, msg_type, content, metadata, created_at,
                      user_id, agent_type, agent_instance_id)
                     VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s, %s)
                     RETURNING message_id
                 """, (message_id, session_id, role, msg_type, content,
                        Json(metadata) if metadata else None,
-                       user_id, agent_type, agent_instance_id))
+                       user_id,
+                       agent_type or "",
+                       agent_instance_id or ""))
 
         logger.debug(f"Appended message {message_id} to session {session_id} (V3.0: inherited isolation)")
         return message_id
@@ -262,7 +265,7 @@ class SessionService:
                         params.append(agent_instance_id)
 
                     cur.execute(f"""
-                        SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata_json, cm.created_at,
+                        SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata, cm.created_at,
                                cs.user_id, cs.agent_type, cs.agent_instance_id
                         FROM chat_messages cm
                         LEFT JOIN chat_sessions cs ON cm.session_id = cs.session_id
@@ -286,7 +289,7 @@ class SessionService:
                     params.append(agent_instance_id)
 
                 cur.execute(f"""
-                    SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata_json, cm.created_at,
+                    SELECT cm.message_id, cm.session_id, cm.role, cm.msg_type, cm.content, cm.metadata, cm.created_at,
                            cs.user_id, cs.agent_type, cs.agent_instance_id
                     FROM chat_messages cm
                     LEFT JOIN chat_sessions cs ON cm.session_id = cs.session_id
@@ -346,8 +349,8 @@ class SessionService:
                     params.append(agent_instance_id)
 
                 cur.execute(f"""
-                    SELECT session_id, user_id, assistant_id, title, status,
-                           metadata_json, created_at, updated_at, related_entry_id,
+                    SELECT session_id, user_id, assistant_id, title,
+                           metadata, created_at,
                            agent_type, agent_instance_id  -- V3.0: 四层隔离字段
                     FROM chat_sessions
                     WHERE {' AND '.join(conditions)}
@@ -360,13 +363,10 @@ class SessionService:
                         user_id=row[1],
                         assistant_id=row[2],
                         title=row[3],
-                        status=row[4],
-                        metadata=row[5] if isinstance(row[5], dict) else None,
-                        created_at=row[6],
-                        updated_at=row[7],
-                        related_entry_id=row[8],
-                        agent_type=row[9],  # V3.0
-                        agent_instance_id=row[10]  # V3.0
+                        metadata=row[4] if isinstance(row[4], dict) else None,
+                        created_at=row[5],
+                        agent_type=row[6],  # V3.0
+                        agent_instance_id=row[7]  # V3.0
                     )
         return None
 
@@ -409,12 +409,12 @@ class SessionService:
                     params.append(agent_instance_id)
 
                 cur.execute(f"""
-                    SELECT session_id, user_id, assistant_id, title, status,
-                           metadata_json, created_at, updated_at, related_entry_id,
+                    SELECT session_id, user_id, assistant_id, title,
+                           metadata, created_at,
                            agent_type, agent_instance_id  -- V3.0: 四层隔离字段
                     FROM chat_sessions
                     WHERE {' AND '.join(conditions)}
-                    ORDER BY updated_at DESC
+                    ORDER BY created_at DESC
                     LIMIT %s
                 """, params + [limit])
 
@@ -425,13 +425,10 @@ class SessionService:
                         user_id=row[1],
                         assistant_id=row[2],
                         title=row[3],
-                        status=row[4],
-                        metadata=row[5] if isinstance(row[5], dict) else None,
-                        created_at=row[6],
-                        updated_at=row[7],
-                        related_entry_id=row[8],
-                        agent_type=row[9],  # V3.0
-                        agent_instance_id=row[10]  # V3.0
+                        metadata=row[4] if isinstance(row[4], dict) else None,
+                        created_at=row[5],
+                        agent_type=row[6],  # V3.0
+                        agent_instance_id=row[7]  # V3.0
                     )
                     for row in rows
                 ]

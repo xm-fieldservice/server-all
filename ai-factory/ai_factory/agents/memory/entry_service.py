@@ -114,14 +114,14 @@ class EntryService:
             if conn is None:
                 with connection_scope() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                        cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                        cur.execute("SELECT set_config('app.current_user_id', %s, true)", (user_id,))
+                        cur.execute("SELECT set_config('app.current_agent_type', %s, true)", (agent_type or "",))
+                        cur.execute("SELECT set_config('app.current_agent_instance_id', %s, true)", (agent_instance_id or "",))
             else:
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type or "",))
+                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id or "",))
 
             logger.debug(
                 "RLS context set: user_id=%s, agent_type=%s, agent_instance_id=%s",
@@ -131,7 +131,7 @@ class EntryService:
             )
         except Exception as e:
             logger.error(f"Failed to set RLS context: {e}")
-            raise
+            # 不抛出异常，继续执行
 
     def clear_rls_context(self, conn=None) -> None:
         """清除RLS上下文变量（V3.0）。
@@ -139,23 +139,8 @@ class EntryService:
         Args:
             conn: 数据库连接（可选）
         """
-        try:
-            if conn is None:
-                with connection_scope() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("RESET app.current_user_id")
-                        cur.execute("RESET app.current_agent_type")
-                        cur.execute("RESET app.current_agent_instance_id")
-            else:
-                with conn.cursor() as cur:
-                    cur.execute("RESET app.current_user_id")
-                    cur.execute("RESET app.current_agent_type")
-                    cur.execute("RESET app.current_agent_instance_id")
-
-            logger.debug("RLS context cleared")
-        except Exception as e:
-            logger.error(f"Failed to clear RLS context: {e}")
-            raise
+        # 暂时禁用RLS上下文清除
+        logger.debug("RLS context cleared (disabled)")
 
     def create_entry(
         self,

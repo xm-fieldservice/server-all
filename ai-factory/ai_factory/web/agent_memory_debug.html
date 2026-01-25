@@ -4,11 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Agent记忆系统 - 调试与使用</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+    <link rel="stylesheet" href="./assets/tailwind.min.css">
+    <link rel="stylesheet" href="./assets/font-awesome.min.css">
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%234b5563'/%3E%3Ctext x='32' y='40' text-anchor='middle' font-size='28' fill='%23e5e7eb' font-family='Arial'%3EA%3C/text%3E%3C/svg%3E">
+    <script src="./assets/react.development.js"></script>
+    <script src="./assets/react-dom.development.js"></script>
+    <script src="./assets/babel.min.js"></script>
     <style>
         body {
             background-color: #f5f5f5;
@@ -101,8 +102,8 @@
                 return response.json();
             },
 
-            async getMessages(sessionId, limit = 50) {
-                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages?limit=${limit}`);
+            async getMessages(sessionId, userId, limit = 50) {
+                const response = await fetch(`${API_BASE_URL}/sessions/${sessionId}/messages?limit=${limit}&user_id=${encodeURIComponent(userId)}`);
                 if (!response.ok) {
                     const error = await response.json();
                     throw new Error(error.detail || '获取消息列表失败');
@@ -576,7 +577,7 @@
                     console.log('[DEBUG] handleSelectSession 开始加载会话数据:', session.session_id);
                     
                     // 加载消息列表
-                    const messagesData = await apiService.getMessages(session.session_id);
+                    const messagesData = await apiService.getMessages(session.session_id, session.user_id || '');
                     console.log('[DEBUG] 消息加载完成:', messagesData);
                     setMessages(messagesData.messages || []);
                     
@@ -625,8 +626,8 @@
                     // 调用新的chat接口（支持语义分析和问答）
                     const result = await apiService.chat(
                         selectedSession.session_id,
-                        'user_001',
-                        'assistant_001',
+                        selectedSession.user_id || 'user_001',
+                        selectedSession.assistant_id || 'assistant_001',
                         inputText,
                         chatMode,
                         'rag'

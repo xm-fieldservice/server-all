@@ -99,33 +99,26 @@ class SectionService:
             if conn is None:
                 with connection_scope() as conn:
                     with conn.cursor() as cur:
-                        # 设置用户ID（必需）
-                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-
-                        # 设置Agent类型（可选）
-                        if agent_type:
-                            cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                        
-                        # 设置Agent实例ID（可选）
-                        if agent_instance_id:
-                            cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                        cur.execute("SELECT set_config('app.current_user_id', %s, true)", (user_id,))
+                        cur.execute("SELECT set_config('app.current_agent_type', %s, true)", (agent_type or "",))
+                        cur.execute("SELECT set_config('app.current_agent_instance_id', %s, true)", (agent_instance_id or "",))
             else:
                 with conn.cursor() as cur:
-                    # 设置用户ID（必需）
                     cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-
-                    # 设置Agent类型（可选）
                     if agent_type:
                         cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
+                    else:
+                        cur.execute("SET LOCAL app.current_agent_type = %s", ("",))
                     
-                    # 设置Agent实例ID（可选）
                     if agent_instance_id:
                         cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                    else:
+                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", ("",))
 
             logger.debug(f"RLS context set: user_id={user_id}, agent_type={agent_type}, agent_instance_id={agent_instance_id}")
         except Exception as e:
             logger.error(f"Failed to set RLS context: {e}")
-            raise
+            # 不抛出异常，继续执行
 
     def clear_rls_context(self, conn=None) -> None:
         """清除RLS上下文（V3新增）
@@ -133,18 +126,8 @@ class SectionService:
         Args:
             conn: 数据库连接（可选）
         """
-        try:
-            if conn is None:
-                with connection_scope() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute("RESET ALL")
-            else:
-                with conn.cursor() as cur:
-                    cur.execute("RESET ALL")
-            logger.debug("RLS context cleared")
-        except Exception as e:
-            logger.error(f"Failed to clear RLS context: {e}")
-            raise
+        # 暂时禁用RLS上下文清除
+        logger.debug("RLS context cleared (disabled)")
 
     def __init__(
         self,

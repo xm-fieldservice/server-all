@@ -252,10 +252,20 @@ async def get_session(session_id: str):
 async def append_message(session_id: str, request: MessageCreateRequest):
     """添加消息到会话"""
     try:
+        # 从数据库查询会话的user_id
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM chat_sessions WHERE session_id = %s", (session_id,))
+                result = cur.fetchone()
+                if not result:
+                    raise HTTPException(status_code=404, detail="会话不存在")
+                user_id = result[0]
+        
         message_id = session_service.append_message(
             session_id=session_id,
             role=request.role,
             content=request.content,
+            user_id=user_id,  # 必需参数
             msg_type=request.msg_type,
             metadata=request.metadata_json
         )
@@ -274,12 +284,13 @@ async def append_message(session_id: str, request: MessageCreateRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/memory/sessions/{session_id}/messages")
-async def get_messages(session_id: str, limit: int = 50, offset: int = 0):
-    """获取会话消息列表"""
+async def get_messages(session_id: str, user_id: str, limit: int = 50, offset: int = 0):
+    """获取会话消息列表（需要显式传入 user_id 以设置 RLS 上下文）"""
     try:
         messages = session_service.get_recent_messages(
             session_id=session_id,
-            limit=limit
+            limit=limit,
+            user_id=user_id  # 必需参数（前端传入）
         )
         
         result = []
@@ -497,12 +508,14 @@ async def chat(request: ChatRequest):
     """完整问答接口：支持笔记入库和问答检索"""
     try:
         logger.info(f"收到问答请求: session_id={request.session_id}, mode={request.mode}")
+        user_id = request.user_id
         
-        # 1. 保存用户消息
+        # 1. 保存用户消息（RLS 上下文在 SessionService 内设置）
         message_id = session_service.append_message(
             session_id=request.session_id,
             role="user",
             content=request.content,
+            user_id=user_id,  # 必需参数
             msg_type=None,
             metadata={"chat_mode": request.mode}
         )
@@ -532,7 +545,8 @@ async def chat(request: ChatRequest):
                 # 获取短期记忆（最近消息）
                 recent_messages = session_service.get_recent_messages(
                     session_id=request.session_id,
-                    limit=5
+                    limit=5,
+                    user_id=user_id  # 必需参数（已由前端传入）
                 )
                 context_text = "\n".join([
                     f"{msg.role}: {msg.content}" 
@@ -595,6 +609,7 @@ async def chat(request: ChatRequest):
                     session_id=request.session_id,
                     role="assistant",
                     content=answer,
+                    user_id=user_id,  # 必需参数
                     msg_type="answer",
                     metadata={"mode": request.mode, "search_mode": request.search_mode}
                 )

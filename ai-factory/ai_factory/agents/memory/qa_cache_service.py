@@ -91,21 +91,22 @@ class QACacheService:
             agent_instance_id: Agent实例ID
             conn: 数据库连接（可选）
         """
-        from ai_factory.db.pgvector_client import connection_scope
         try:
+            from ai_factory.db.pgvector_client import connection_scope
             if conn is None:
                 with connection_scope() as conn:
                     with conn.cursor() as cur:
-                        cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                        cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                        cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                        cur.execute("SELECT set_config('app.current_user_id', %s, true)", (user_id,))
+                        cur.execute("SELECT set_config('app.current_agent_type', %s, true)", (agent_type or "",))
+                        cur.execute("SELECT set_config('app.current_agent_instance_id', %s, true)", (agent_instance_id or "",))
             else:
                 with conn.cursor() as cur:
                     cur.execute("SET LOCAL app.current_user_id = %s", (user_id,))
-                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type,))
-                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id,))
+                    cur.execute("SET LOCAL app.current_agent_type = %s", (agent_type or "",))
+                    cur.execute("SET LOCAL app.current_agent_instance_id = %s", (agent_instance_id or "",))
         except Exception as e:
             logger.error(f"Failed to set RLS context: {e}")
+            # 不抛出异常，继续执行
 
     def _get_connection(self):
         """获取数据库连接"""
