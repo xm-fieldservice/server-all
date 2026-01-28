@@ -5,40 +5,37 @@ sys.path.insert(0, '.')
 from ai_factory.db.pgvector_client import connection_scope
 
 print("=" * 60)
-print("数据存储分析报告")
+print("数据存储分析报告（entries-only）")
 print("=" * 60)
 
 try:
     with connection_scope() as conn:
         with conn.cursor() as cur:
-            # 查询消息数量
-            cur.execute('SELECT COUNT(*) FROM chat_messages')
-            msg_count = cur.fetchone()[0]
-            print(f"\n💬 消息总数: {msg_count}")
+            # 查询 entries 记录数量
+            cur.execute('SELECT COUNT(*) FROM entries')
+            entry_count = cur.fetchone()[0]
+            print(f"\n📚 entries 总数: {entry_count}")
             
-            # 查询最新消息
-            if msg_count > 0:
+            # 查询最近一条 entry
+            if entry_count > 0:
                 cur.execute('''
-                    SELECT message_id, role, msg_type, content, created_at 
-                    FROM chat_messages 
+                    SELECT entry_id, title, LEFT(content, 80), created_at 
+                    FROM entries 
                     ORDER BY created_at DESC 
                     LIMIT 1
                 ''')
                 row = cur.fetchone()
-                print(f"\n📝 最新消息:")
+                print(f"\n📝 最新 entry:")
                 print(f"   ID: {row[0][:8]}...")
-                print(f"   角色: {row[1]}")
-                print(f"   类型: {row[2] or '未设置'}")
-                print(f"   内容: {row[3][:50]}...")
-                print(f"   时间: {row[4]}")
+                print(f"   标题: {row[1] or '(无标题)'}")
+                print(f"   内容: {row[2]}...")
+                print(f"   时间: {row[3]}")
             
             print("\n" + "=" * 60)
             print("存储位置清单:")
             print("=" * 60)
-            print("1. chat_sessions - 会话信息")
-            print("2. chat_messages - 消息内容（你的输入）")
-            print("3. entries - 长期记忆（总结后）")
-            print("4. sections - 段落信息")
+            print("1. entries - 长期记忆事实表")
+            print("2. entry_embeddings - 向量索引表（如已启用）")
             
 except Exception as e:
     print(f"错误: {e}")

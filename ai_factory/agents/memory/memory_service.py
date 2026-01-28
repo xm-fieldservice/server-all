@@ -284,10 +284,10 @@ class MemoryService:
 
     def __init__(
         self,
-        session_service: SessionService,
-        section_service: SectionService,
-        entry_service: EntryService,
-        memory0_service: Memory0Service,
+        session_service: Optional[SessionService] = None,
+        section_service: Optional[SectionService] = None,
+        entry_service: EntryService = None,
+        memory0_service: Memory0Service = None,
         model: str = "gpt-3.5-turbo"
     ) -> None:
         """初始化 MemoryService。
@@ -335,6 +335,9 @@ class MemoryService:
         Returns:
             ContextForTurn: 上下文对象
         """
+        if self.session_service is None:
+            raise RuntimeError("SessionService is disabled: chat* tables are not available")
+
         # 1. 获取静态提示词（简化版）
         system_prompt = self._get_static_prompt(agent_id)
 
@@ -475,6 +478,9 @@ class MemoryService:
         Returns:
             str: message_id
         """
+        if self.session_service is None:
+            raise RuntimeError("SessionService is disabled: chat* tables are not available")
+
         return self.session_service.append_message(
             session_id=session_id,
             role=role,
@@ -500,6 +506,9 @@ class MemoryService:
         Returns:
             Dict[str, Any]: 整理结果
         """
+        if self.section_service is None:
+            raise RuntimeError("SectionService is disabled: chat* tables are not available")
+
         summary = self.section_service.summarize_section(
             session_id=session_id,
             agent_id=agent_id,

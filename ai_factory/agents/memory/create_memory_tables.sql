@@ -5,109 +5,7 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================
--- 1. chat_sessions 表（会话表）
--- ============================================================
-CREATE TABLE IF NOT EXISTS chat_sessions (
-    -- 主键
-    session_id VARCHAR(64) PRIMARY KEY,
-
-    -- 用户和助手关联
-    user_id VARCHAR(64) NOT NULL,
-    assistant_id VARCHAR(64) NOT NULL,
-
-    -- 会话元数据
-    title VARCHAR(256),
-    status VARCHAR(32) NOT NULL DEFAULT 'active',
-    metadata_json JSONB,
-
-    -- 时间戳
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    -- 关联引用
-    related_entry_id VARCHAR(64)
-);
-
--- 创建索引
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_user_id ON chat_sessions(user_id);
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_assistant_id ON chat_sessions(assistant_id);
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_status ON chat_sessions(status);
-CREATE INDEX IF NOT EXISTS idx_chat_sessions_created_at ON chat_sessions(created_at);
-
-COMMENT ON TABLE chat_sessions IS '会话表，存储用户与助手的对话会话';
-
--- ============================================================
--- 2. chat_messages 表（消息表）
--- ============================================================
-CREATE TABLE IF NOT EXISTS chat_messages (
-    -- 主键
-    message_id VARCHAR(64) PRIMARY KEY,
-
-    -- 会话关联
-    session_id VARCHAR(64) NOT NULL,
-
-    -- 消息角色和类型
-    role VARCHAR(16) NOT NULL,  -- 'user' | 'assistant' | 'system' | 'tool'
-    msg_type VARCHAR(32),            -- 'question' | 'statement' | 'answer' | 'other'
-
-    -- 消息内容
-    content TEXT NOT NULL,
-
-    -- 元数据
-    metadata_json JSONB,
-
-    -- 时间戳
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
--- 创建索引
-CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at);
-CREATE INDEX IF NOT EXISTS idx_chat_messages_role ON chat_messages(role);
-
-COMMENT ON TABLE chat_messages IS '消息表，存储会话中的所有消息';
-
--- ============================================================
--- 3. chat_sections 表（片段表）
--- ============================================================
-CREATE TABLE IF NOT EXISTS chat_sections (
-    -- 主键
-    section_id VARCHAR(64) PRIMARY KEY,
-
-    -- 会话关联
-    session_id VARCHAR(64) NOT NULL,
-
-    -- 片段信息
-    title VARCHAR(256),
-    status VARCHAR(32) NOT NULL DEFAULT 'active',  -- 'active' | 'completed' | 'archived'
-    trigger_type VARCHAR(32) NOT NULL,  -- 'auto' | 'manual' | 'timeout'
-    message_count INTEGER NOT NULL DEFAULT 0,
-
-    -- 摘要
-    summary_content TEXT,
-    summary_entry_id VARCHAR(64),
-
-    -- 代理关联
-    agent_id VARCHAR(64) NOT NULL,
-
-    -- 时间戳
-    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    completed_at TIMESTAMP WITH TIME ZONE
-);
-
--- 创建索引
-CREATE INDEX IF NOT EXISTS idx_chat_sections_session_id ON chat_sections(session_id);
-CREATE INDEX IF NOT EXISTS idx_chat_sections_status ON chat_sections(status);
-CREATE INDEX IF NOT EXISTS idx_chat_sections_trigger_type ON chat_sections(trigger_type);
-CREATE INDEX IF NOT EXISTS idx_chat_sections_agent_id ON chat_sections(agent_id);
-CREATE INDEX IF NOT EXISTS idx_chat_sections_created_at ON chat_sections(created_at);
-CREATE INDEX IF NOT EXISTS idx_chat_sections_completed_at ON chat_sections(completed_at);
-
-COMMENT ON TABLE chat_sections IS '聊天片段表，用于聚合和管理会话中的片段';
-
--- ============================================================
--- 4. qa_query_index 表（Q&A缓存表）
+-- 1. qa_query_index 表（Q&A缓存表）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS qa_query_index (
     -- 主键
@@ -155,7 +53,7 @@ CREATE INDEX IF NOT EXISTS idx_qa_query_index_question_embedding ON qa_query_ind
 COMMENT ON TABLE qa_query_index IS 'Q&A缓存表，用于快速响应重复问题';
 
 -- ============================================================
--- 5. 扩展 entries 表（添加记忆相关字段）
+-- 2. 扩展 entries 表（添加记忆相关字段）
 -- ============================================================
 
 -- 检查并添加新字段（使用 IF NOT EXISTS 避免重复添加）
@@ -244,23 +142,8 @@ CREATE INDEX IF NOT EXISTS idx_entries_importance ON entries(importance);
 CREATE INDEX IF NOT EXISTS idx_entries_overridden_entry_ids ON entries USING GIN (overridden_entry_ids);
 
 -- ============================================================
--- 6. 创建外键约束（可选）
+-- 3. 创建外键约束（可选，仅保留与 entries 相关的约束）
 -- ============================================================
-
--- chat_messages -> chat_sessions
-ALTER TABLE chat_messages
-ADD CONSTRAINT IF NOT EXISTS fk_chat_messages_session_id
-FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE;
-
--- chat_sections -> chat_sessions
-ALTER TABLE chat_sections
-ADD CONSTRAINT IF NOT EXISTS fk_chat_sections_session_id
-FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE;
-
--- chat_sections.summary_entry_id -> entries
-ALTER TABLE chat_sections
-ADD CONSTRAINT IF NOT EXISTS fk_chat_sections_summary_entry_id
-FOREIGN KEY (summary_entry_id) REFERENCES entries(entry_id) ON DELETE SET NULL;
 
 -- qa_query_index.answer_entry_id -> entries
 ALTER TABLE qa_query_index
@@ -271,22 +154,7 @@ FOREIGN KEY (answer_entry_id) REFERENCES entries(entry_id) ON DELETE CASCADE;
 -- 完成
 -- ============================================================
 
--- 验证表创建
-SELECT
-    'chat_sessions' as table_name,
-    COUNT(*) as row_count
-FROM chat_sessions
-UNION ALL
-SELECT
-    'chat_messages' as table_name,
-    COUNT(*) as row_count
-FROM chat_messages
-UNION ALL
-SELECT
-    'chat_sections' as table_name,
-    COUNT(*) as row_count
-FROM chat_sections
-UNION ALL
+-- 验证表创建（仅检查与 entries 直接相关的表）
 SELECT
     'qa_query_index' as table_name,
     COUNT(*) as row_count

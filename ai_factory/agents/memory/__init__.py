@@ -90,15 +90,7 @@ from .monitoring import (
 )
 
 __all__ = [
-    # SessionService
-    "SessionService",
-    "SessionInfo",
-    "MessageInfo",
-    # SectionService
-    "SectionService",
-    "SectionSummary",
-    "SectionInfo",
-    "SectionTrigger",
+    # （不再导出 SessionService/SectionService 相关类型，以便下线 chat* 表）
     # EntryService
     "EntryService",
     # Memory0Service
@@ -208,19 +200,9 @@ def create_memory_stack(
     """
     vector_client = VectorClient()
     entry_service = EntryService(vector_client=vector_client)
-    session_service = SessionService()
     task_queue = task_queue or get_task_queue()
-    section_service = SectionService(
-        entry_service=entry_service,
-        vector_client=vector_client,  # 注入共享的 VectorClient
-        task_queue=task_queue,      # 注入任务队列
-        enable_async_memory0=enable_async_memory0,  # 启用异步 Memory0
-        section_trigger_message_count=section_trigger_message_count,
-        section_trigger_time_interval=section_trigger_time_interval,
-        section_trigger_cooldown=section_trigger_cooldown,  # 添加冷却时间窗
-        section_trigger_keywords=section_trigger_keywords,
-        enable_async_section_summarize=enable_async_section_summarize  # 启用异步 Section 整理
-    )
+
+    # 默认不再实例化 SessionService/SectionService，以便支持 entries-only 的存储方案
     memory0_service = Memory0Service(
         entry_service=entry_service,
         vector_client=vector_client,  # 注入共享的 VectorClient
@@ -228,8 +210,8 @@ def create_memory_stack(
     )
 
     memory_service = MemoryService(
-        session_service=session_service,
-        section_service=section_service,
+        session_service=None,
+        section_service=None,
         entry_service=entry_service,
         memory0_service=memory0_service,
     )
