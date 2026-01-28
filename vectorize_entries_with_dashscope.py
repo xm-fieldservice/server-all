@@ -120,7 +120,7 @@ def build_embedding_text(entry: Dict[str, Any]) -> str:
         parts.append(f"摘要: {summary.strip()}")
 
     # 3. 内容（截断到2000字符）
-    content = entry.get("content") or ""
+    content = entry.get("input_content") or ""
     if content.strip():
         parts.append(f"内容: {content.strip()[:2000]}")
 
@@ -140,7 +140,7 @@ def fetch_unembedded_entries(limit: int = 50) -> List[Dict[str, Any]]:
         SELECT e.entry_id,
                e.title,
                e.summary_ai,
-               e.content,
+               e.input_content,
                e.created_at
         FROM entries e
         LEFT JOIN entry_embeddings emb ON e.entry_id = emb.entry_id
@@ -171,7 +171,7 @@ def fetch_entry_by_id(entry_id: str) -> Optional[Dict[str, Any]]:
         SELECT entry_id,
                title,
                summary_ai,
-               content,
+               input_content,
                created_at
         FROM entries
         WHERE entry_id = %s;

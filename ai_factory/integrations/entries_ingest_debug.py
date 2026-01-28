@@ -249,7 +249,7 @@ def entries_ingest_debug(
         "entry_id": entry_id,
         "title": title,
         "summary_ai": summary,
-        "content": content,
+        "input_content": content,
         "created_at": base_meta.get("note_datetime") or now,
     }
 

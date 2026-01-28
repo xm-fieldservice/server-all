@@ -19,7 +19,7 @@ try:
             # 查询最近一条 entry
             if entry_count > 0:
                 cur.execute('''
-                    SELECT entry_id, title, LEFT(content, 80), created_at 
+                    SELECT entry_id, title, LEFT(input_content, 80), created_at 
                     FROM entries 
                     ORDER BY created_at DESC 
                     LIMIT 1

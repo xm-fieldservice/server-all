@@ -1,0 +1,29 @@
+nohup: ignoring input
+INFO:     Will watch for changes in these directories: ['/home/ecs-assist-user/ai-factory']
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
+INFO:     Started reloader process [1286281] using WatchFiles
+2026-01-28 21:32:48 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 21:32:48 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1286284]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/db/entries_repo.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1286284]
+2026-01-28 21:35:34 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 21:35:34 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1287013]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/db/entries_repo.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1287013]
+2026-01-28 21:38:29 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 21:38:29 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1287670]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.

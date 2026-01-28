@@ -35,7 +35,7 @@ def analyze_duplicates(limit_groups: int = 50, limit_entries: int = 200) -> None
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT left(content::text, 120) AS content_head,
+                SELECT left(input_content::text, 120) AS content_head,
                        count(*) AS cnt
                 FROM entries
                 GROUP BY content_head
@@ -60,7 +60,7 @@ def analyze_duplicates(limit_groups: int = 50, limit_entries: int = 200) -> None
             cur.execute(
                 """
                 WITH dup AS (
-                    SELECT left(content::text, 120) AS content_head
+                    SELECT left(input_content::text, 120) AS content_head
                     FROM entries
                     GROUP BY content_head
                     HAVING count(*) > 1
@@ -68,10 +68,10 @@ def analyze_duplicates(limit_groups: int = 50, limit_entries: int = 200) -> None
                 SELECT e.entry_id,
                        e.title,
                        e.created_at,
-                       left(e.content::text, 120) AS content_head
+                       left(e.input_content::text, 120) AS content_head
                 FROM entries e
                 JOIN dup d
-                  ON left(e.content::text, 120) = d.content_head
+                  ON left(e.input_content::text, 120) = d.content_head
                 ORDER BY e.created_at, e.entry_id
                 LIMIT %s;
                 """,
@@ -105,7 +105,7 @@ def analyze_incomplete(limit_entries: int = 200) -> None:
                        title,
                        summary_ai,
                        created_at,
-                       left(content::text, 80) AS content_head
+                       left(input_content::text, 80) AS content_head
                 FROM entries
                 WHERE (title IS NULL OR trim(title) = '')
                    OR (summary_ai IS NULL OR length(trim(summary_ai)) < 20)

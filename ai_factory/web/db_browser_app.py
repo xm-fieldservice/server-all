@@ -44,12 +44,12 @@ def _list_entries(q: str, page: int, page_size: int = PAGE_SIZE) -> Tuple[List[E
 
     if q:
         like = f"%{q}%"
-        base_sql += " AND (title ILIKE %s OR summary_ai ILIKE %s OR content ILIKE %s)"
+        base_sql += " AND (title ILIKE %s OR summary_ai ILIKE %s OR input_content ILIKE %s)"
         params.extend([like, like, like])
 
     count_sql = "SELECT COUNT(*) " + base_sql
     list_sql = (
-        "SELECT entry_id, title, summary_ai, content, project_code, user_id, created_at, memo "
+        "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, created_at, answer_payload AS memo "
         + base_sql
         + " ORDER BY created_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -150,10 +150,14 @@ def _render_page(
                 )
 
         # content 作为大块正文
-        content_value = selected_detail.get("content") if "content" in selected_detail else ""
+        content_value = selected_detail.get("input_content" if "input_content" in selected_detail else "content")
 
-        # memo 作为单独的大块（JSON 格式化）
-        memo_value = selected_detail.get("memo") if "memo" in selected_detail else None
+        # memo/answer_payload 作为单独的大块（JSON 格式化）
+        memo_value = None
+        if "answer_payload" in selected_detail:
+            memo_value = selected_detail.get("answer_payload")
+        elif "memo" in selected_detail:
+            memo_value = selected_detail.get("memo")
         memo_html = ""
         if memo_value is not None:
             # 将 memo 值格式化为可读的 JSON
@@ -172,7 +176,7 @@ def _render_page(
         # 其余字段
         extra_fields_parts: List[str] = []
         for k, v in selected_detail.items():
-            if k in key_fields or k == "content" or k == "memo":
+            if k in key_fields or k in ("content", "input_content", "memo", "answer_payload"):
                 continue
             extra_fields_parts.append(
                 """

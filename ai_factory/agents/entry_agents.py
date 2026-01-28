@@ -48,7 +48,7 @@ def entries_chunk_agent(raw_text: str, base_meta: Dict[str, Any] | None = None) 
         record: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
-            "content": part,
+            "input_content": part,
         }
         # 可选元数据透传
         record.update({k: v for k, v in base_meta.items() if k not in record})

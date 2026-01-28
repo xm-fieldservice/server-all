@@ -22,7 +22,7 @@ with connection_scope() as conn:
         
         if count > 0:
             cur.execute('''
-                SELECT entry_id, title, LEFT(content, 80), created_at 
+                SELECT entry_id, title, LEFT(input_content, 80), created_at 
                 FROM entries 
                 ORDER BY created_at DESC 
                 LIMIT 3

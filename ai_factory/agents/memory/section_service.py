@@ -319,7 +319,7 @@ class SectionService:
 
                 cur.execute(f"""
                     SELECT entry_id, section_id, section_version, is_latest,
-                           content, scene_tags, agent_id, created_at
+                           input_content AS content, scene_tags, agent_id, created_at
                     FROM entries
                     WHERE {" AND ".join(conditions)}
                     ORDER BY section_version DESC

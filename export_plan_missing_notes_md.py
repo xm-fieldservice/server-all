@@ -106,7 +106,7 @@ def query_entries_by_content_head(content_head: str):
     sql = """
         SELECT entry_id
         FROM entries
-        WHERE left(content::text, 120) = %s
+        WHERE left(input_content::text, 120) = %s
         LIMIT 1;
     """
 

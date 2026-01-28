@@ -36,6 +36,10 @@ class EntryService:
         payload = dict(data)
         payload["entry_id"] = entry_id
 
+        # 将业务字段 content 映射到物理列 input_content
+        if "content" in payload and "input_content" not in payload:
+            payload["input_content"] = payload.pop("content")
+
         # 处理 JSONB 字段
         for key in ["scene_tags", "extra_meta", "metadata_json"]:
             if key in payload and isinstance(payload[key], dict):
@@ -129,7 +133,8 @@ class EntryService:
 
         for key, value in kwargs.items():
             if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id"]:
-                updates.append(f"{key} = %s")
+                column = "input_content" if key == "content" else key
+                updates.append(f"{column} = %s")
                 params.append(value)
             elif key in ["scene_tags", "extra_meta", "metadata_json"] and isinstance(value, dict):
                 updates.append(f"{key} = %s")
@@ -214,7 +219,7 @@ class EntryService:
                             params.append(Json({key: value}))
 
                 cur.execute(f"""
-                    SELECT entry_id, title, content, section_id, section_version, is_latest,
+                    SELECT entry_id, title, input_content AS content, section_id, section_version, is_latest,
                            scene_tags, agent_id, space_type, created_at, updated_at
                     FROM entries
                     WHERE {" AND ".join(conditions)}
@@ -266,6 +271,10 @@ class EntryService:
 
             payload = dict(data)
             payload["entry_id"] = entry_id
+
+            # 将业务字段 content 映射到物理列 input_content
+            if "content" in payload and "input_content" not in payload:
+                payload["input_content"] = payload.pop("content")
 
             # 处理 JSONB 字段
             for key in ["scene_tags", "extra_meta", "metadata_json"]:
@@ -329,9 +338,9 @@ class EntryService:
                     for key, value in update_data.items():
                         if key == "entry_id":
                             continue
-
                         if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id"]:
-                            update_fields.append(f"{key} = %s")
+                            column = "input_content" if key == "content" else key
+                            update_fields.append(f"{column} = %s")
                             params.append(value)
                         elif key in ["scene_tags", "extra_meta", "metadata_json"] and isinstance(value, dict):
                             update_fields.append(f"{key} = %s")
@@ -432,7 +441,7 @@ class EntryService:
                     conditions.append("is_latest = TRUE")
 
                 cur.execute(f"""
-                    SELECT entry_id, title, content, section_id, section_version, is_latest,
+                    SELECT entry_id, title, input_content AS content, section_id, section_version, is_latest,
                            scene_tags, agent_id, created_at, updated_at
                     FROM entries
                     WHERE {" AND ".join(conditions)}
@@ -483,6 +492,10 @@ class EntryService:
 
             payload = dict(data)
             payload["entry_id"] = entry_id
+
+            # 将业务字段 content 映射到物理列 input_content
+            if "content" in payload and "input_content" not in payload:
+                payload["input_content"] = payload.pop("content")
 
             # 处理 JSONB 字段
             for key in ["scene_tags", "extra_meta", "metadata_json"]:
@@ -548,7 +561,8 @@ class EntryService:
                             continue
 
                         if key in ["title", "content", "space_type", "section_id", "agent_id", "source_session_id"]:
-                            update_fields.append(f"{key} = %s")
+                            column = "input_content" if key == "content" else key
+                            update_fields.append(f"{column} = %s")
                             params.append(value)
                         elif key in ["scene_tags", "extra_meta", "metadata_json"] and isinstance(value, dict):
                             update_fields.append(f"{key} = %s")

@@ -50,7 +50,7 @@ def index_entries(entry_ids: List[str]) -> int:
         entry = entries_repo.get_entry(eid)
         if not entry:
             continue
-        text = f"{entry.get('title', '')}\n{entry.get('content', '')}"
+        text = f"{entry.get('title', '')}\n{entry.get('input_content', '')}"
         vec = _fake_embed(text)
 
         sql = f"""

@@ -90,8 +90,8 @@ def run_db_query_team(
     conditions: List[str] = []
     params: List[Any] = []
 
-    # 在 title / content 上做简单模糊匹配
-    conditions.append("(title ILIKE %s OR content ILIKE %s)")
+    # 在 title / input_content 上做简单模糊匹配
+    conditions.append("(title ILIKE %s OR input_content ILIKE %s)")
     params.extend([pattern, pattern])
 
     if since_dt is not None:
@@ -105,7 +105,7 @@ def run_db_query_team(
             entry_id,
             title,
             summary_ai,
-            content,
+            input_content AS content,
             project_code,
             user_id,
             created_at

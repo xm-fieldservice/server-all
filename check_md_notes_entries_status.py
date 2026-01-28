@@ -121,9 +121,9 @@ def query_entries_by_content_head(content_head: str) -> List[Dict[str, Any]]:
                project_code,
                user_id,
                created_at,
-               left(content::text, 120) AS content_head
+               left(input_content::text, 120) AS content_head
         FROM entries
-        WHERE left(content::text, 120) = %s
+        WHERE left(input_content::text, 120) = %s
         ORDER BY created_at ASC, entry_id ASC;
     """
 

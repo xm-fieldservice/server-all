@@ -16,13 +16,13 @@ def ensure_entries_table() -> None:
 
     create_sql = """
     CREATE TABLE IF NOT EXISTS public.entries (
-        entry_id      TEXT PRIMARY KEY,
-        title         TEXT NOT NULL,
-        summary_ai    TEXT,
-        content       TEXT NOT NULL,
-        project_code  TEXT,
-        user_id       TEXT,
-        created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        entry_id       TEXT PRIMARY KEY,
+        title          TEXT NOT NULL,
+        summary_ai     TEXT,
+        input_content  TEXT NOT NULL,
+        project_code   TEXT,
+        user_id        TEXT,
+        created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     """
 

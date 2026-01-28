@@ -36,8 +36,8 @@ OUTPUT_MD = project_root / "agent_memory_nodes_export.md"
 def get_entry_by_id(entry_id: str) -> Optional[Dict[str, Any]]:
     """根据entry_id获取单条记录。"""
     sql = """
-        SELECT entry_id, title, summary_ai, content, project_code, user_id,
-               created_at, space_type, parent_entry_id, scene_tags, memo
+        SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id,
+               created_at, space_type, parent_entry_id, scene_tags, answer_payload AS memo
         FROM entries
         WHERE entry_id = %s
     """
@@ -54,8 +54,8 @@ def get_entry_by_id(entry_id: str) -> Optional[Dict[str, Any]]:
 def get_children_by_parent(parent_id: str) -> List[Dict[str, Any]]:
     """获取指定父节点的所有直接子节点。"""
     sql = """
-        SELECT entry_id, title, summary_ai, content, project_code, user_id,
-               created_at, space_type, parent_entry_id, scene_tags, memo
+        SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id,
+               created_at, space_type, parent_entry_id, scene_tags, answer_payload AS memo
         FROM entries
         WHERE parent_entry_id = %s
         ORDER BY created_at, entry_id

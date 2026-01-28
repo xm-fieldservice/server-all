@@ -61,11 +61,11 @@ def _list_entries(
 
     if q:
         sql = (
-            "SELECT entry_id, title, summary_ai, content, project_code, user_id, "
+            "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
             "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
             "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
             "FROM entries "
-            "WHERE title ILIKE %s OR summary_ai ILIKE %s OR content ILIKE %s "
+            "WHERE title ILIKE %s OR summary_ai ILIKE %s OR input_content ILIKE %s "
             "ORDER BY created_at DESC, entry_id DESC "
             "LIMIT %s OFFSET %s"
         )
@@ -73,7 +73,7 @@ def _list_entries(
         params = (pattern, pattern, pattern, page_size, offset)
     else:
         sql = (
-            "SELECT entry_id, title, summary_ai, content, project_code, user_id, "
+            "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
             "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
             "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
             "FROM entries "
@@ -117,7 +117,7 @@ def _list_entries(
 
 def _get_entry(entry_id: str) -> Optional[EntryRow]:
     sql = (
-        "SELECT entry_id, title, summary_ai, content, project_code, user_id, "
+        "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
         "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
         "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
         "FROM entries WHERE entry_id = %s"

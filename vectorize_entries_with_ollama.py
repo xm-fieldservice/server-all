@@ -60,7 +60,7 @@ def fetch_unembedded_entries(limit: int = BATCH_SIZE) -> List[Dict[str, Any]]:
         SELECT e.entry_id,
                e.title,
                e.summary_ai,
-               e.content,
+               e.input_content,
                e.project_code,
                e.user_id,
                e.created_at

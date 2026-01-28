@@ -308,7 +308,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
-            "content": raw_text,
+            "input_content": raw_text,
             "created_at": base_meta.get("note_datetime") or now,
         }
 
@@ -454,7 +454,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
-            "content": raw_text,
+            "input_content": raw_text,
             "created_at": base_meta.get("note_datetime") or now,
         }
 
@@ -605,7 +605,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
-            "content": content,
+            "input_content": content,
             "created_at": base_meta.get("note_datetime") or now,
         }
 

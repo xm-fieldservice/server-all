@@ -65,7 +65,7 @@ async def handle_call_tool(
         entry = {
             "entry_id": entry_id,
             "title": title,
-            "content": content,
+            "input_content": content,
             "summary_ai": summary or title,
             "space_type": "note",
             "scene_tags": tags or {"source": "codebuddy-execution"},

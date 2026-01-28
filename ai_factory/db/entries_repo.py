@@ -9,6 +9,9 @@ v0 目标：
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
+from datetime import datetime
+from pathlib import Path
+import traceback
 
 from psycopg2.extras import Json
 
@@ -35,6 +38,38 @@ def insert_entry(entry: Dict[str, Any]) -> str:
     col_sql = ", ".join(columns)
     placeholders = ", ".join(["%s"] * len(columns))
     sql = f"INSERT INTO entries ({col_sql}) VALUES ({placeholders})"
+
+    # 调试日志：打印即将写入的列名，帮助定位是否仍有 content 残留
+    try:
+        print(
+            "[entries_repo.insert_entry] columns=",
+            columns,
+            "has_content=",
+            ("content" in columns),
+            "has_input_content=",
+            ("input_content" in columns),
+        )
+        # 额外写入文件，便于跨进程排查（含调用栈摘要）
+        try:
+            this_file = Path(__file__).resolve()
+            root = this_file.parents[2]
+            logs_dir = root / "logs"
+            logs_dir.mkdir(parents=True, exist_ok=True)
+            log_path = logs_dir / "entries_insert_debug.log"
+            stack = " | ".join(
+                f"{f.filename}:{f.lineno}:{f.name}" for f in traceback.extract_stack(limit=10)
+            )
+            ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    f"{ts} columns={columns} has_content={(\"content\" in columns)} has_input_content={(\"input_content\" in columns)}\n"
+                )
+                f.write(f"  stack: {stack}\n")
+        except Exception:
+            pass
+    except Exception:
+        # 调试日志失败不影响主流程
+        pass
 
     with connection_scope() as conn:
         with conn.cursor() as cur:
@@ -92,7 +127,9 @@ def update_entry_fields(entry_id: str, fields: Dict[str, Any]) -> None:
         return
 
     columns = list(fields.keys())
-    set_clauses = [f"{c} = %s" for c in columns]
+    # 将业务字段 content 映射到物理列 input_content
+    mapped_columns = ["input_content" if c == "content" else c for c in columns]
+    set_clauses = [f"{c} = %s" for c in mapped_columns]
     values: List[Any] = []
     for c in columns:
         v = fields[c]

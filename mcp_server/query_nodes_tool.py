@@ -61,7 +61,7 @@ class QueryNodesTool:
         with connection_scope() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT entry_id, title, content, summary_ai, 
+                    SELECT entry_id, title, input_content AS content, summary_ai, 
                            parent_entry_id, space_type, scene_tags,
                            created_at, user_id, project_code
                     FROM entries
@@ -88,7 +88,7 @@ class QueryNodesTool:
         with connection_scope() as conn:
             with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT entry_id, title, content, summary_ai,
+                    SELECT entry_id, title, input_content AS content, summary_ai,
                            parent_entry_id, space_type, scene_tags,
                            created_at, user_id, project_code
                     FROM entries

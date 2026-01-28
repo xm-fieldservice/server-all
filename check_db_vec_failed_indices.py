@@ -85,7 +85,7 @@ def parse_timeline_blocks() -> List[Tuple[int, str]]:
 
 
 def fetch_recent_entries(limit: int = 2000) -> List[Dict[str, Any]]:
-    sql = "SELECT entry_id, created_at, title, content FROM entries ORDER BY created_at DESC LIMIT %s"
+    sql = "SELECT entry_id, created_at, title, input_content AS content FROM entries ORDER BY created_at DESC LIMIT %s"
     with connection_scope() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (limit,))

@@ -151,7 +151,7 @@ def _fetch_entries(batch_size: int = 50, since_id: Optional[str] = None) -> List
         where_sql = "WHERE " + " AND ".join(conditions)
 
     sql = f"""
-        SELECT entry_id, title, summary_ai, content, project_code, user_id, created_at
+        SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, created_at
         FROM entries
         {where_sql}
         ORDER BY entry_id ASC
@@ -182,7 +182,7 @@ def _reprocess_specific_entries(entry_ids: List[str]) -> None:
         with connection_scope() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT entry_id, title, summary_ai, content, project_code, user_id, created_at "
+                    "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, created_at "
                     "FROM entries WHERE entry_id = %s",
                     (entry_id,),
                 )

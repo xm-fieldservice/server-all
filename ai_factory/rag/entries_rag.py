@@ -100,7 +100,7 @@ def search_entries(
             e.entry_id,
             e.title,
             e.summary_ai,
-            e.content,
+            e.input_content AS content,
             e.project_code,
             e.user_id,
             e.created_at,

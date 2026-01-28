@@ -47,7 +47,7 @@ def fetch_duplicate_ids() -> Tuple[int, List[str]]:
 
     # 先找出存在重复的 content 分组
     sql_groups = """
-        SELECT content::text AS content_text, COUNT(*) AS cnt
+        SELECT input_content::text AS content_text, COUNT(*) AS cnt
         FROM entries
         GROUP BY content_text
         HAVING COUNT(*) > 1;
@@ -75,7 +75,7 @@ def fetch_duplicate_ids() -> Tuple[int, List[str]]:
                     """
                     SELECT entry_id
                     FROM entries
-                    WHERE content::text = %s
+                    WHERE input_content::text = %s
                     ORDER BY created_at ASC, entry_id ASC;
                     """,
                     (content_text,),

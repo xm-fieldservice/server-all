@@ -130,9 +130,9 @@ async def search_entries(
             with conn.cursor() as cur:
                 # 使用LIKE进行简单搜索
                 cur.execute("""
-                    SELECT entry_id, content, entry_type, created_at, metadata_json
+                    SELECT entry_id, input_content AS content, created_at
                     FROM entries
-                    WHERE content ILIKE %s
+                    WHERE input_content ILIKE %s
                     LIMIT %s
                 """, (f"%{query}%", top_k))
                 
@@ -144,11 +144,11 @@ async def search_entries(
                         "entry_id": row[0],
                         "content": row[1],
                         "summary": "",  # 暂时返回空字符串
-                        "entry_type": row[2],
+                        "entry_type": "note",
                         "similarity": 0.8,  # 模拟相似度
-                        "created_at": row[3].isoformat() if row[3] else None,
-                        "metadata_json": row[4] or {},
-                        "source": "长期记忆"
+                        "created_at": row[2].isoformat() if row[2] else None,
+                        "metadata_json": {},
+                        "source": "entries"
                     })
                 
                 logger.info(f"搜索条目: query='{query}', results={len(result)}")

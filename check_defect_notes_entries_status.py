@@ -74,7 +74,7 @@ def query_entries_by_content_head(content_head: str) -> List[Tuple[str, str]]:
     sql = """
         SELECT entry_id, COALESCE(title, '') AS title
         FROM entries
-        WHERE left(content::text, 120) = %s
+        WHERE left(input_content::text, 120) = %s
         ORDER BY created_at ASC, entry_id ASC;
     """
 
