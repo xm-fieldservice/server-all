@@ -62,7 +62,7 @@ def insert_entry(entry: Dict[str, Any]) -> str:
             ts = datetime.utcnow().isoformat(timespec="seconds") + "Z"
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(
-                    f"{ts} columns={columns} has_content={(\"content\" in columns)} has_input_content={(\"input_content\" in columns)}\n"
+                    f"{ts} columns={columns} has_content={('content' in columns)} has_input_content={('input_content' in columns)}\n"
                 )
                 f.write(f"  stack: {stack}\n")
         except Exception:

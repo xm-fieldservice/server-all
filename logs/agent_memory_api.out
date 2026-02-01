@@ -27,3 +27,233 @@ INFO:     Finished server process [1287013]
 INFO:     Started server process [1287670]
 INFO:     Waiting for application startup.
 INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'smoke_ingest_entries.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1287670]
+WARNING:  WatchFiles detected changes in 'smoke_ingest_entries.py'. Reloading...
+2026-01-28 23:01:28 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:01:28 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1306758]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+2026-01-28 23:01:29 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:01:29 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1306763]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/db/entries_repo.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1306763]
+2026-01-28 23:03:51 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:03:51 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1307345]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'smoke_ingest_entries.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1307345]
+2026-01-28 23:06:36 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:06:36 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1308058]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/entries_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1308058]
+2026-01-28 23:21:37 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:21:37 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1311829]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/db/pgvector_client.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1311829]
+2026-01-28 23:26:03 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-28 23:26:03 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1312822]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/db/pgvector_client.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1312822]
+2026-01-29 00:27:19 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 00:27:19 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1326737]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'smoke_ingest_entries.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1326737]
+2026-01-29 00:28:34 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 00:28:34 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1327021]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'smoke_ingest_entries.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1327021]
+2026-01-29 00:29:24 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 00:29:24 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1327215]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1327215]
+2026-01-29 00:50:16 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 00:50:16 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1332044]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/integrations/entries_ingest.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1332044]
+2026-01-29 00:54:29 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 00:54:29 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1333032]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1333032]
+2026-01-29 01:08:39 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 01:08:39 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1336723]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1336723]
+2026-01-29 01:09:17 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 01:09:17 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1336874]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1336874]
+2026-01-29 01:15:58 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 01:15:58 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1338576]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1338576]
+2026-01-29 01:17:19 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 01:17:20 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1338873]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/db_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1338873]
+2026-01-29 01:23:00 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-01-29 01:23:01 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [1340204]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/integrations/task_types.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1340204]
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+2026-02-01 20:08:57 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-02-01 20:08:57 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [2057669]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/integrations/task_manager.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2057669]
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+2026-02-01 20:09:51 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-02-01 20:09:51 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [2057741]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/web/entries_browser_app.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2057741]
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+2026-02-01 20:12:10 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-02-01 20:12:11 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [2057969]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'test_2nd_channel.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2057969]
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+2026-02-01 20:13:00 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-02-01 20:13:00 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [2058046]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'ai_factory/integrations/task_manager.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2058046]
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+Python-dotenv could not parse statement starting at line 28
+2026-02-01 20:17:37 | INFO     | ai_factory.agents.memory.monitoring | 监控系统初始化完成
+2026-02-01 20:17:38 | INFO     | agent_memory_api | 记忆系统服务初始化成功（entries-only）
+INFO:     Started server process [2058385]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:57308 - "POST /ai-factory/tasks/ingest HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57316 - "POST /ai-factory/tasks/ingest HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57320 - "POST /ai-factory/tasks/ingest HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:57322 - "GET /ai-factory/tasks?limit=20 HTTP/1.1" 404 Not Found
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [2058385]
+INFO:     Stopping reloader process [1286281]

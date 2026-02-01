@@ -63,7 +63,7 @@ def _list_entries(
         sql = (
             "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
             "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
-            "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
+            "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS created_at "
             "FROM entries "
             "WHERE title ILIKE %s OR summary_ai ILIKE %s OR input_content ILIKE %s "
             "ORDER BY created_at DESC, entry_id DESC "
@@ -75,7 +75,7 @@ def _list_entries(
         sql = (
             "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
             "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
-            "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
+            "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS created_at "
             "FROM entries "
             "ORDER BY created_at DESC, entry_id DESC "
             "LIMIT %s OFFSET %s"
@@ -119,7 +119,7 @@ def _get_entry(entry_id: str) -> Optional[EntryRow]:
     sql = (
         "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
         "space_type, parent_entry_id, scene_tags::text AS scene_tags_json, "
-        "to_char(created_at, 'YYYY-MM-DD HH24:MI:SS') AS created_at "
+        "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS created_at "
         "FROM entries WHERE entry_id = %s"
     )
     with connection_scope() as conn:
@@ -201,6 +201,131 @@ async def api_entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="entries_ingest 返回结果不是 dict")
 
     return result
+
+
+# ==================== 2号通道：异步任务管理接口 ====================
+
+from ai_factory.integrations.task_manager import TaskManager, TaskType
+from ai_factory.integrations.task_types import TaskType as TaskTypeEnum
+from ai_factory.integrations.rag_api import qa_answer_rag
+from ai_factory.integrations.web_api import qa_answer_web
+
+task_manager = TaskManager()
+
+
+@app.post("/ai-factory/tasks/ingest")
+async def submit_task(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """提交异步任务（2号通道）
+
+    支持的任务类型：
+    - NOTE: 笔记整理入库（整理+写库+向量化）
+    - RAG: RAG查询
+    - WEB: Web查询
+
+    Args:
+        payload: 任务参数
+            - task_type: 任务类型 (note/rag/web)
+            - payload: 任务具体参数
+                NOTE任务: {raw_text, project_code?, user_id?, note_datetime?, extra_context?, extra_meta?, idempotency_key?}
+                RAG任务: {question_text, project_code?, user_id?, top_k?, since?}
+                WEB任务: {question_text, project_code?, user_id?, top_k?, options?}
+            - idempotency_key: 幂等键（可选）
+
+    Returns:
+        {ok, job_id, status: "queued"}
+
+    Raises:
+        HTTPException: 任务类型不支持或参数错误
+    """
+    task_type_str = payload.get("task_type")
+    if not task_type_str:
+        raise HTTPException(status_code=400, detail="task_type 必填")
+
+    # 转换任务类型
+    try:
+        task_type = TaskType(task_type_str.lower())
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"不支持的任务类型: {task_type_str}")
+
+    # 提取payload（如果是嵌套结构）
+    task_payload = payload.get("payload", payload)
+
+    # 提交任务
+    job_id = task_manager.submit_task(
+        task_type=task_type,
+        payload=task_payload,
+        idempotency_key=payload.get("idempotency_key"),
+    )
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "status": "queued",
+    }
+
+
+@app.get("/ai-factory/tasks/ingest/{job_id}")
+async def get_task_status(job_id: str) -> Dict[str, Any]:
+    """查询任务状态（2号通道）
+
+    Args:
+        job_id: 任务ID
+
+    Returns:
+        {ok, status: "queued"/"running"/"succeeded"/"failed", entry_id?, result?, error_code?, error_message?}
+
+    Raises:
+        HTTPException: 任务不存在
+    """
+    job = task_manager.get_job(job_id)
+
+    if not job:
+        raise HTTPException(status_code=404, detail=f"任务不存在: {job_id}")
+
+    return {
+        "ok": True,
+        "status": job.status,
+        "entry_id": job.entry_id,
+        "result": job.result,
+        "error_code": job.error_code,
+        "error_message": job.error_message,
+    }
+
+
+@app.get("/ai-factory/tasks")
+async def list_tasks(
+    status: Optional[str] = Query(None, description="任务状态"),
+    task_type: Optional[str] = Query(None, description="任务类型"),
+    limit: int = Query(100, ge=1, le=1000, description="返回数量"),
+) -> Dict[str, Any]:
+    """列出任务（2号通道）
+
+    Args:
+        status: 任务状态过滤
+        task_type: 任务类型过滤
+        limit: 返回数量限制
+
+    Returns:
+        {ok, tasks: [{job_id, task_type, status, entry_id?, created_at?, updated_at?}]}
+    """
+    task_type_enum = None
+    if task_type:
+        try:
+            task_type_enum = TaskType(task_type.lower())
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"不支持的任务类型: {task_type}")
+
+    jobs = task_manager.list_jobs(
+        status=status,
+        task_type=task_type_enum,
+        limit=limit,
+    )
+
+    return {
+        "ok": True,
+        "tasks": [job.to_dict() for job in jobs],
+        "count": len(jobs),
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

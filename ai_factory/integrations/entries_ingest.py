@@ -301,15 +301,14 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         entry_id = f"ent_{uuid4().hex[:8]}"
         title = raw_text
         summary = raw_text
-
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
             "input_content": raw_text,
-            "created_at": base_meta.get("note_datetime") or now,
+            "created_at": created_at,
         }
 
         # 优先从 payload.extra_context.tags_snapshot 构造 scene_tags, 退回到从正文解析
@@ -361,6 +360,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         model_name = os.getenv("INGEST_MODEL_NAME", "deepseek-chat")
         base_url = os.getenv("INGEST_MODEL_BASE_URL", "https://api.deepseek.com").rstrip("/")
+        created_at = datetime.utcnow().isoformat()
 
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
@@ -447,15 +447,14 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         entry_id = f"ent_{uuid4().hex[:8]}"
         summary = raw_text
-
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
             "input_content": raw_text,
-            "created_at": base_meta.get("note_datetime") or now,
+            "created_at": created_at,
         }
 
         # 优先从 payload.extra_context.tags_snapshot 构造 scene_tags, 退回到从正文解析
@@ -598,15 +597,14 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         entry_id = f"ent_{uuid4().hex[:8]}"
         content = raw_text
-
-        now = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+        created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
             "input_content": content,
-            "created_at": base_meta.get("note_datetime") or now,
+            "created_at": created_at,
         }
 
         # 优先从 payload.extra_context.tags_snapshot 构造 scene_tags, 退回到从正文解析

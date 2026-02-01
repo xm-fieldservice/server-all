@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from ai_factory.db.pgvector_client import connection_scope
 
@@ -49,7 +49,9 @@ def _list_entries(q: str, page: int, page_size: int = PAGE_SIZE) -> Tuple[List[E
 
     count_sql = "SELECT COUNT(*) " + base_sql
     list_sql = (
-        "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, created_at, answer_payload AS memo "
+        "SELECT entry_id, title, summary_ai, input_content AS content, project_code, user_id, "
+        "to_char(created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS created_at, "
+        "answer_payload AS memo "
         + base_sql
         + " ORDER BY created_at DESC, entry_id DESC LIMIT %s OFFSET %s"
     )
@@ -83,7 +85,10 @@ def _list_entries(q: str, page: int, page_size: int = PAGE_SIZE) -> Tuple[List[E
 
 
 def _get_entry_detail(entry_id: str) -> Optional[Dict[str, Any]]:
-    sql = "SELECT * FROM entries WHERE entry_id = %s"
+    sql = (
+        "SELECT e.*, to_char(e.created_at AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI:SS') AS created_at_sh "
+        "FROM entries e WHERE e.entry_id = %s"
+    )
     with connection_scope() as conn:
         with conn.cursor() as cur:
             cur.execute(sql, (entry_id,))
@@ -93,6 +98,84 @@ def _get_entry_detail(entry_id: str) -> Optional[Dict[str, Any]]:
             colnames = [d[0] for d in cur.description]
     return dict(zip(colnames, row))
 
+
+def _render_detail_fragment(selected_detail: Dict[str, Any]) -> str:
+    key_fields = [
+        "entry_id",
+        "title",
+        "summary_ai",
+        "project_code",
+        "user_id",
+        "workspace_id",
+        "note_datetime",
+        "created_at",
+    ]
+    detail_header_parts: List[str] = []
+    for k in key_fields:
+        if k in selected_detail:
+            v = selected_detail.get("created_at_sh") if k == "created_at" and "created_at_sh" in selected_detail else selected_detail.get(k)
+            detail_header_parts.append(
+                f"<div><strong>{k}:</strong> {'' if v is None else v}</div>"
+            )
+
+    content_value = selected_detail.get("input_content" if "input_content" in selected_detail else "content")
+
+    memo_value = None
+    if "answer_payload" in selected_detail:
+        memo_value = selected_detail.get("answer_payload")
+    elif "memo" in selected_detail:
+        memo_value = selected_detail.get("memo")
+    memo_html = ""
+    if memo_value is not None:
+        import json
+        try:
+            if isinstance(memo_value, str):
+                memo_value = json.loads(memo_value)
+            memo_formatted = json.dumps(memo_value, ensure_ascii=False, indent=2)
+        except Exception:
+            memo_formatted = str(memo_value)
+        memo_html = f"""
+        <div class="detail-content-label">Memo (JSON)：</div>
+        <pre id="detail-memo" class="detail-content">{memo_formatted}</pre>
+        """
+
+    extra_fields_parts: List[str] = []
+    for k, v in selected_detail.items():
+        if k in key_fields or k in ("content", "input_content", "memo", "answer_payload"):
+            continue
+        extra_fields_parts.append(
+            """
+            <div class="field-block">
+              <div class="field-label">{k}</div>
+              <pre class="field-pre">{v}</pre>
+            </div>
+            """.format(k=k, v="" if v is None else v)
+        )
+
+    return """
+    <div class="detail-header">
+      {header}
+    </div>
+    <div class="detail-content-label">原文 content：</div>
+    <pre id="detail-content" class="detail-content">{content}</pre>
+    {memo}
+    <div class="detail-extra">
+      {extra}
+    </div>
+    """.format(
+        header="\n".join(detail_header_parts),
+        content="" if content_value is None else content_value,
+        memo=memo_html,
+        extra="\n".join(extra_fields_parts),
+    )
+
+
+@app.get("/detail_html", response_class=HTMLResponse)
+async def detail_html(entry_id: str) -> str:
+    d = _get_entry_detail(entry_id)
+    if not d:
+        return "<div class=\"detail-empty\">未选中任何记录</div>"
+    return _render_detail_fragment(d)
 
 def _render_page(
     *,
@@ -115,16 +198,15 @@ def _render_page(
         active_class = " active" if is_active else ""
         title = r.title or "(无标题)"
         meta = f"id={r.entry_id} b7 {r.created_at or ''}"
-        href = f"/?q={q}&page={page}&selected_id={r.entry_id}" if q else f"/?page={page}&selected_id={r.entry_id}"
         list_items_html.append(
             """
             <li class="entry-item{active}">
-              <a href="{href}">
+              <a href="#" onclick="return selectEntry('{entry_id}', this)">
                 <div class="entry-title">{title}</div>
                 <div class="entry-meta">{meta}</div>
               </a>
             </li>
-            """.format(active=active_class, href=href, title=title, meta=meta)
+            """.format(active=active_class, entry_id=r.entry_id, title=title, meta=meta)
         )
 
     list_html = "\n".join(list_items_html) if list_items_html else "<li class=\"entry-empty\">暂无记录</li>"
@@ -144,7 +226,7 @@ def _render_page(
         detail_header_parts: List[str] = []
         for k in key_fields:
             if k in selected_detail:
-                v = selected_detail.get(k)
+                v = selected_detail.get("created_at_sh") if k == "created_at" and "created_at_sh" in selected_detail else selected_detail.get(k)
                 detail_header_parts.append(
                     f"<div><strong>{k}:</strong> {'' if v is None else v}</div>"
                 )
@@ -396,6 +478,7 @@ def _render_page(
               </div>
               <div>
                 <button class="btn" type="button" onclick="copyContent()">复制当前 content</button>
+                <button class="btn" style="margin-left:8px;color:#fff;background:#ff4d4f;border-color:#ff4d4f;" type="button" onclick="deleteEntry()">删除</button>
               </div>
             </div>
             <div class="detail-body">
@@ -405,6 +488,7 @@ def _render_page(
         </div>
 
         <script>
+          var selectedId = "{selected_id}";
           function copyContent() {{
             var el = document.getElementById('detail-content');
             if (!el) {{
@@ -448,6 +532,48 @@ def _render_page(
             }}
             document.body.removeChild(textarea);
           }}
+          function selectEntry(id, anchorEl) {{
+            fetch('/detail_html?entry_id=' + encodeURIComponent(id))
+              .then(function(resp) {{ return resp.text(); }})
+              .then(function(html) {{
+                var body = document.querySelector('.detail-body');
+                if (body) {{ body.innerHTML = html; }}
+                selectedId = id;
+                // active 切换
+                try {{
+                  document.querySelectorAll('.entry-item').forEach(function(li) {{ li.classList.remove('active'); }});
+                  if (anchorEl) {{
+                    var li = anchorEl.closest('.entry-item');
+                    if (li) {{ li.classList.add('active'); }}
+                  }}
+                }} catch (e) {{}}
+                // 更新 URL 的 selected_id 但不刷新
+                try {{
+                  var url = new URL(window.location.href);
+                  url.searchParams.set('selected_id', id);
+                  window.history.replaceState({{}}, '', url.toString());
+                }} catch (e) {{}}
+              }})
+              .catch(function(err) {{
+                alert('加载详情失败: ' + err);
+              }});
+            return false;
+          }}
+        </script>
+        <script>
+          function deleteEntry() {{
+            var q = "{q}";
+            var page = {page};
+            if (!selectedId) {{
+              alert('未选中任何记录，无法删除');
+              return;
+            }}
+            if (!confirm('确认删除该记录？(同时删除其 embedding)')) {{
+              return;
+            }}
+            var url = '/delete?entry_id=' + encodeURIComponent(selectedId) + '&q=' + encodeURIComponent(q) + '&page=' + page;
+            window.location.href = url;
+          }}
         </script>
       </body>
     </html>
@@ -456,13 +582,14 @@ def _render_page(
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index(q: str = "", page: int = 1) -> str:
+async def index(q: str = "", page: int = 1, selected_id: Optional[str] = None) -> str:
     page = max(page, 1)
     rows, total_count = _list_entries(q=q.strip(), page=page, page_size=PAGE_SIZE)
 
-    # 默认选中当前页第一条
     selected_detail: Optional[Dict[str, Any]] = None
-    if rows:
+    if selected_id:
+        selected_detail = _get_entry_detail(selected_id)
+    if not selected_detail and rows:
         selected_detail = _get_entry_detail(rows[0].entry_id)
 
     return _render_page(
@@ -473,3 +600,16 @@ async def index(q: str = "", page: int = 1) -> str:
         total_count=total_count,
         selected_detail=selected_detail,
     )
+
+
+@app.get("/delete")
+async def delete(entry_id: str, q: str = "", page: int = 1) -> RedirectResponse:
+    if entry_id:
+        with connection_scope() as conn:
+            with conn.cursor() as cur:
+                try:
+                    cur.execute("DELETE FROM entry_embeddings WHERE entry_id = %s", (entry_id,))
+                except Exception:
+                    pass
+                cur.execute("DELETE FROM entries WHERE entry_id = %s", (entry_id,))
+    return RedirectResponse(url=f"/?q={q}&page={page}", status_code=303)

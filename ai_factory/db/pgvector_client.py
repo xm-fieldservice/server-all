@@ -22,11 +22,11 @@ from psycopg2.extensions import connection as PgConnection
 
 
 def _get_dsn() -> str:
-    host = os.getenv("AI_PG_HOST", "localhost")
-    port = os.getenv("AI_PG_PORT", "5433")
-    db = os.getenv("AI_PG_DB", "rag_db")
-    user = os.getenv("AI_PG_USER", "rag_user")
-    password = os.getenv("AI_PG_PASSWORD", "rag_password")
+    host = os.getenv("AI_PG_HOST") or "localhost"
+    port = os.getenv("AI_PG_PORT") or "5433"
+    db = os.getenv("AI_PG_DB") or "rag_db"
+    user = os.getenv("AI_PG_USER") or "rag_user"
+    password = os.getenv("AI_PG_PASSWORD") or "rag_password"
 
     return f"dbname={db} user={user} password={password} host={host} port={port}"
 
@@ -38,7 +38,17 @@ def get_connection() -> PgConnection:
     """
 
     dsn = _get_dsn()
-    return psycopg2.connect(dsn)
+    conn = psycopg2.connect(dsn)
+    # 设置会话时区，统一 NOW() 与 timestamptz 的显示/排序语义
+    try:
+        tz = os.getenv("AI_TZ", "Asia/Shanghai")
+        with conn.cursor() as cur:
+            cur.execute("SET TIME ZONE %s", (tz,))
+        conn.commit()
+    except Exception:
+        # 若设置失败，不影响连接使用
+        conn.rollback()
+    return conn
 
 
 @contextmanager
