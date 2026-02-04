@@ -1507,12 +1507,16 @@
                     y: lanes.find(l => l.label === n.owner)?.y || 100
                 }));
 
+            // 只保留源和目标都在 nodes 中的边
+            const nodeIds = new Set(nodes.map(n => n.id));
             const edges = projectData.nodes
-                .filter(n => n.parentId && n.parentId !== 'root')
+                .filter(n => n.parentId && n.parentId !== 'root' && nodeIds.has(n.parentId) && nodeIds.has(n.id))
                 .map(n => ({
                     source: n.parentId,
                     target: n.id
                 }));
+
+            console.log('[Swimlane] Nodes:', nodes.length, 'Edges:', edges.length);
 
             graph.data({ nodes, edges });
             graph.render();
@@ -1538,9 +1542,13 @@
                 .filter(n => n.type === 'level1' || n.type === 'module')
                 .map(n => ({ id: n.id, label: n.label }));
 
+            // 只保留源和目标都在 nodes 中的边
+            const nodeIds = new Set(nodes.map(n => n.id));
             const edges = projectData.nodes
-                .filter(n => n.parentId && n.parentId !== 'root')
+                .filter(n => n.parentId && n.parentId !== 'root' && nodeIds.has(n.parentId) && nodeIds.has(n.id))
                 .map(n => ({ source: n.parentId, target: n.id }));
+
+            console.log('[Frame] Nodes:', nodes.length, 'Edges:', edges.length);
 
             graph.data({ nodes, edges });
             graph.render();
@@ -1597,17 +1605,19 @@
                 }
             });
 
-            // 从 nodes 中提取关系
-            const nodes = projectData.nodes.slice(0, 10).map(n => ({
+            // 从 nodes 中提取关系 - 只取前10个节点
+            const allNodes = projectData.nodes.slice(0, 10);
+            const nodes = allNodes.map(n => ({
                 id: n.id,
                 label: n.label,
                 size: n.children?.length > 0 ? 60 : 40
             }));
 
-            // 从 parentId 和 children 构建边
+            // 只保留源和目标都在 nodes 中的边
+            const nodeIds = new Set(nodes.map(n => n.id));
             const edges = [];
-            projectData.nodes.forEach(n => {
-                if (n.parentId && n.parentId !== 'root') {
+            allNodes.forEach(n => {
+                if (n.parentId && n.parentId !== 'root' && nodeIds.has(n.parentId) && nodeIds.has(n.id)) {
                     edges.push({ source: n.parentId, target: n.id });
                 }
             });
