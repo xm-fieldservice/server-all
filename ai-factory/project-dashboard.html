@@ -1,0 +1,1820 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>项目管理看板 - Project Dashboard</title>
+    <script src="https://unpkg.com/@antv/g6@4.8.0/dist/g6.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+            background: #f0f2f5;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* 主布局容器 - 动态布局 */
+        .main-layout {
+            display: grid;
+            height: 100vh;
+            width: 100vw;
+        }
+
+        .layout-1x1 {
+            grid-template-columns: 200px 1fr 320px;
+        }
+
+        .layout-1x2 {
+            grid-template-columns: 60px 1fr 1fr 320px;
+        }
+
+        .layout-2x1 {
+            grid-template-columns: 60px 1fr 320px;
+            grid-template-rows: 1fr 1fr;
+        }
+
+        .layout-2x2 {
+            grid-template-columns: 60px 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+        }
+
+        /* 左侧边栏 */
+        .sidebar {
+            background: #1a1a2e;
+            color: #fff;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            grid-row: 1 / -1;
+            grid-column: 1;
+        }
+
+        .sidebar.compact {
+            width: 60px;
+        }
+
+        .sidebar-header {
+            padding: 16px;
+            border-bottom: 1px solid #2d2d44;
+        }
+
+        .sidebar-header h1 {
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .sidebar-header .subtitle {
+            font-size: 10px;
+            color: #888;
+            margin-top: 2px;
+        }
+
+        /* 布局控制区 */
+        .layout-control {
+            padding: 12px 16px;
+            border-bottom: 1px solid #2d2d44;
+        }
+
+        .layout-title {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+        }
+
+        .layout-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 4px;
+        }
+
+        .layout-btn {
+            aspect-ratio: 1;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+
+        .layout-btn:hover {
+            background: rgba(102, 126, 234, 0.3);
+        }
+
+        .layout-btn.active {
+            background: rgba(102, 126, 234, 0.5);
+            border-color: #667eea;
+        }
+
+        .layout-icon {
+            display: grid;
+            gap: 2px;
+        }
+
+        .layout-icon-1x1 {
+            grid-template-columns: 1fr;
+            width: 16px;
+            height: 16px;
+        }
+
+        .layout-icon-1x2 {
+            grid-template-columns: 1fr 1fr;
+            width: 16px;
+            height: 16px;
+        }
+
+        .layout-icon-2x1 {
+            grid-template-columns: 1fr;
+            grid-template-rows: 1fr 1fr;
+            width: 16px;
+            height: 16px;
+        }
+
+        .layout-icon-2x2 {
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            width: 16px;
+            height: 16px;
+        }
+
+        .layout-cell {
+            background: rgba(255,255,255,0.8);
+            border-radius: 1px;
+        }
+
+        /* 图表类型选项 */
+        .chart-menu {
+            flex: 1;
+            padding: 8px 0;
+        }
+
+        .menu-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 16px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 3px solid transparent;
+        }
+
+        .menu-item:hover {
+            background: rgba(102, 126, 234, 0.1);
+        }
+
+        .menu-item.active {
+            background: rgba(102, 126, 234, 0.2);
+            border-left-color: #667eea;
+        }
+
+        .menu-icon {
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+        }
+
+        .menu-text {
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        /* 视图容器 */
+        .view-container {
+            position: relative;
+            background: #fff;
+            border: 1px solid #e8e8e8;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            min-height: 0; /* 重要：防止grid子项溢出 */
+        }
+
+        .view-container.focused {
+            border-color: #667eea;
+            box-shadow: inset 0 0 0 2px rgba(102, 126, 234, 0.2);
+        }
+
+        /* 多视图布局下的视图容器 */
+        .layout-1x2 .view-container,
+        .layout-2x1 .view-container,
+        .layout-2x2 .view-container {
+            min-height: 0;
+        }
+
+        /* 视图头部 */
+        .view-header {
+            height: 36px;
+            background: #fafbfc;
+            border-bottom: 1px solid #e8e8e8;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 12px;
+            flex-shrink: 0;
+        }
+
+        .view-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: #333;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .view-controls {
+            display: flex;
+            gap: 4px;
+        }
+
+        .view-btn {
+            padding: 4px 8px;
+            border: 1px solid #d9d9d9;
+            background: #fff;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s ease;
+        }
+
+        .view-btn:hover {
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        /* 图表区域 */
+        .chart-area {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .chart-container {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 图表选择浮层 */
+        .chart-selector {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            padding: 16px;
+            z-index: 100;
+            display: none;
+        }
+
+        .chart-selector.active {
+            display: block;
+        }
+
+        .selector-title {
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .selector-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .selector-item {
+            padding: 12px;
+            border: 1px solid #e8e8e8;
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+        .selector-item:hover {
+            border-color: #667eea;
+            background: rgba(102, 126, 234, 0.05);
+        }
+
+        .selector-icon {
+            font-size: 24px;
+            margin-bottom: 4px;
+        }
+
+        .selector-label {
+            font-size: 11px;
+            color: #666;
+        }
+
+        /* 右侧详情面板 */
+        .detail-panel {
+            background: #fff;
+            border-left: 1px solid #e8e8e8;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            grid-row: 1 / -1;
+            grid-column: -2; /* 总是占据最后一列 */
+        }
+
+        .detail-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e8e8e8;
+            background: #fafbfc;
+        }
+
+        .detail-header h3 {
+            font-size: 13px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        .detail-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+        }
+
+        /* 详情面板样式（与之前类似） */
+        .detail-empty {
+            text-align: center;
+            padding: 40px 20px;
+            color: #999;
+        }
+
+        .detail-empty-icon {
+            font-size: 40px;
+            margin-bottom: 12px;
+        }
+
+        .detail-section {
+            margin-bottom: 16px;
+        }
+
+        .detail-section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: #666;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+        }
+
+        .detail-field {
+            margin-bottom: 10px;
+        }
+
+        .detail-label {
+            font-size: 10px;
+            color: #888;
+            margin-bottom: 3px;
+        }
+
+        .detail-input, .detail-select, .detail-textarea {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .detail-textarea {
+            min-height: 60px;
+            resize: vertical;
+        }
+
+        .detail-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 12px;
+        }
+
+        .detail-btn {
+            flex: 1;
+            padding: 6px 10px;
+            border: 1px solid #d9d9d9;
+            background: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+        }
+
+        .detail-btn.primary {
+            background: #667eea;
+            color: #fff;
+            border-color: #667eea;
+        }
+
+        .detail-btn.danger {
+            background: #ff4d4f;
+            color: #fff;
+            border-color: #ff4d4f;
+        }
+
+        /* 全局工具栏 */
+        .global-toolbar {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #fff;
+            border-radius: 30px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            padding: 8px 16px;
+            display: flex;
+            gap: 8px;
+            z-index: 1000;
+        }
+
+        .global-btn {
+            padding: 8px 16px;
+            border: none;
+            background: transparent;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            transition: all 0.2s ease;
+        }
+
+        .global-btn:hover {
+            background: #f0f0f0;
+        }
+
+        .global-btn.primary {
+            background: #667eea;
+            color: #fff;
+        }
+
+        /* 提示消息 */
+        .toast {
+            position: fixed;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #333;
+            color: #fff;
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 13px;
+            z-index: 3000;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        /* 右键菜单 */
+        .context-menu {
+            position: absolute;
+            background: #fff;
+            border: 1px solid #e8e8e8;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 1000;
+            min-width: 140px;
+            display: none;
+        }
+
+        .context-menu-item {
+            padding: 8px 14px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: background 0.2s ease;
+        }
+
+        .context-menu-item:hover {
+            background: #f5f5f5;
+        }
+
+        /* 甘特图特殊样式 */
+        .gantt-container {
+            overflow-x: auto;
+            overflow-y: hidden;
+        }
+
+        /* 响应式 */
+        @media (max-width: 1200px) {
+            .layout-2x2 {
+                grid-template-columns: 60px 1fr;
+                grid-template-rows: 1fr 1fr 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="main-layout layout-1x1" id="main-layout">
+        <!-- 左侧边栏 -->
+        <div class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1>📊 PM看板</h1>
+                <div class="subtitle">多视图管理</div>
+            </div>
+
+            <!-- 布局控制 -->
+            <div class="layout-control">
+                <div class="layout-title">布局模式</div>
+                <div class="layout-grid">
+                    <div class="layout-btn active" onclick="changeLayout('1x1')" title="单视图">
+                        <div class="layout-icon layout-icon-1x1">
+                            <div class="layout-cell"></div>
+                        </div>
+                    </div>
+                    <div class="layout-btn" onclick="changeLayout('1x2')" title="左右双视图">
+                        <div class="layout-icon layout-icon-1x2">
+                            <div class="layout-cell"></div>
+                            <div class="layout-cell"></div>
+                        </div>
+                    </div>
+                    <div class="layout-btn" onclick="changeLayout('2x1')" title="上下双视图">
+                        <div class="layout-icon layout-icon-2x1">
+                            <div class="layout-cell"></div>
+                            <div class="layout-cell"></div>
+                        </div>
+                    </div>
+                    <div class="layout-btn" onclick="changeLayout('2x2')" title="四视图">
+                        <div class="layout-icon layout-icon-2x2">
+                            <div class="layout-cell"></div>
+                            <div class="layout-cell"></div>
+                            <div class="layout-cell"></div>
+                            <div class="layout-cell"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="chart-menu">
+                <div class="menu-item active" data-chart="mindmap" onclick="setChartType('mindmap')">
+                    <span class="menu-icon">🧠</span>
+                    <span class="menu-text">脑图</span>
+                </div>
+                <div class="menu-item" data-chart="gantt" onclick="setChartType('gantt')">
+                    <span class="menu-icon">📅</span>
+                    <span class="menu-text">甘特图</span>
+                </div>
+                <div class="menu-item" data-chart="swimlane" onclick="setChartType('swimlane')">
+                    <span class="menu-icon">🏊</span>
+                    <span class="menu-text">泳道图</span>
+                </div>
+                <div class="menu-item" data-chart="frame" onclick="setChartType('frame')">
+                    <span class="menu-icon">📐</span>
+                    <span class="menu-text">框图</span>
+                </div>
+                <div class="menu-item" data-chart="flow" onclick="setChartType('flow')">
+                    <span class="menu-icon">🔄</span>
+                    <span class="menu-text">流程图</span>
+                </div>
+                <div class="menu-item" data-chart="relation" onclick="setChartType('relation')">
+                    <span class="menu-icon">🕸️</span>
+                    <span class="menu-text">关系图谱</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 视图容器 - 动态生成 -->
+        <div class="view-container" id="view-0" data-index="0">
+            <div class="view-header">
+                <div class="view-title">
+                    <span id="view-icon-0">🧠</span>
+                    <span id="view-title-0">脑图视图</span>
+                </div>
+                <div class="view-controls">
+                    <button class="view-btn" onclick="showChartSelector(0)">切换</button>
+                    <button class="view-btn" onclick="zoomIn(0)">+</button>
+                    <button class="view-btn" onclick="zoomOut(0)">-</button>
+                    <button class="view-btn" onclick="resetView(0)">⟲</button>
+                </div>
+            </div>
+            <div class="chart-area">
+                <div id="chart-0" class="chart-container"></div>
+                
+                <!-- 图表选择器 -->
+                <div class="chart-selector" id="selector-0">
+                    <div class="selector-title">选择图表类型</div>
+                    <div class="selector-grid">
+                        <div class="selector-item" onclick="selectChartType(0, 'mindmap')">
+                            <div class="selector-icon">🧠</div>
+                            <div class="selector-label">脑图</div>
+                        </div>
+                        <div class="selector-item" onclick="selectChartType(0, 'gantt')">
+                            <div class="selector-icon">📅</div>
+                            <div class="selector-label">甘特图</div>
+                        </div>
+                        <div class="selector-item" onclick="selectChartType(0, 'swimlane')">
+                            <div class="selector-icon">🏊</div>
+                            <div class="selector-label">泳道图</div>
+                        </div>
+                        <div class="selector-item" onclick="selectChartType(0, 'frame')">
+                            <div class="selector-icon">📐</div>
+                            <div class="selector-label">框图</div>
+                        </div>
+                        <div class="selector-item" onclick="selectChartType(0, 'flow')">
+                            <div class="selector-icon">🔄</div>
+                            <div class="selector-label">流程图</div>
+                        </div>
+                        <div class="selector-item" onclick="selectChartType(0, 'relation')">
+                            <div class="selector-icon">🕸️</div>
+                            <div class="selector-label">关系图</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧详情面板 -->
+        <div class="detail-panel">
+            <div class="detail-header">
+                <h3>📋 节点详情</h3>
+            </div>
+            <div class="detail-content" id="detail-content">
+                <div class="detail-empty">
+                    <div class="detail-empty-icon">📊</div>
+                    <div>点击脑图中的节点<br>查看和编辑详情</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 全局工具栏 -->
+    <div class="global-toolbar">
+        <button class="global-btn primary" onclick="addNode()">
+            <span>➕</span> 添加节点
+        </button>
+        <button class="global-btn" onclick="syncAllViews()">
+            <span>🔄</span> 同步视图
+        </button>
+        <button class="global-btn" onclick="exportData()">
+            <span>💾</span> 导出数据
+        </button>
+        <button class="global-btn" onclick="resetAllData()">
+            <span>🔄</span> 重置
+        </button>
+    </div>
+
+    <!-- 提示消息 -->
+    <div class="toast" id="toast"></div>
+
+    <!-- 右键菜单 -->
+    <div class="context-menu" id="context-menu">
+        <div class="context-menu-item" onclick="addChildNode()">➕ 添加子节点</div>
+        <div class="context-menu-item" onclick="editNode()">✏️ 编辑</div>
+        <div class="context-menu-item" onclick="deleteNode()">🗑️ 删除</div>
+    </div>
+
+    <script>
+        // ==================== 统一数据模型 ====================
+        // 所有图表共享这一个数据源
+        const projectData = {
+            // 项目基本信息
+            project: {
+                id: 'root',
+                name: 'AI工厂建设项目',
+                description: '基于双循环架构的AI工厂建设项目，包含战略、目标、规划、执行等多个阶段',
+                owner: '项目经理',
+                startDate: '2025-01-01',
+                endDate: '2025-06-30',
+                progress: 35,
+                status: 'active'
+            },
+            
+            // 节点数据（所有图表的基础）
+            nodes: [
+                {
+                    id: 'strategy',
+                    label: '战略层',
+                    type: 'level1',
+                    status: 'completed',
+                    description: '制定项目战略方向和愿景',
+                    owner: '项目总监',
+                    startDate: '2025-01-01',
+                    endDate: '2025-01-15',
+                    progress: 100,
+                    parentId: 'root',
+                    children: ['str1', 'str2', 'str3']
+                },
+                {
+                    id: 'str1',
+                    label: '确立愿景',
+                    type: 'task',
+                    status: 'completed',
+                    description: '明确项目的长期愿景和目标',
+                    owner: '项目总监',
+                    startDate: '2025-01-01',
+                    endDate: '2025-01-05',
+                    progress: 100,
+                    parentId: 'strategy',
+                    children: []
+                },
+                {
+                    id: 'str2',
+                    label: '制定战略',
+                    type: 'task',
+                    status: 'completed',
+                    description: '制定实现愿景的战略路径',
+                    owner: '项目总监',
+                    startDate: '2025-01-06',
+                    endDate: '2025-01-10',
+                    progress: 100,
+                    parentId: 'strategy',
+                    children: []
+                },
+                {
+                    id: 'str3',
+                    label: '战略评审',
+                    type: 'task',
+                    status: 'completed',
+                    description: '评审并确认战略方案',
+                    owner: '项目总监',
+                    startDate: '2025-01-11',
+                    endDate: '2025-01-15',
+                    progress: 100,
+                    parentId: 'strategy',
+                    children: []
+                },
+                {
+                    id: 'goal',
+                    label: '目标层',
+                    type: 'level1',
+                    status: 'completed',
+                    description: '将战略分解为可衡量的目标',
+                    owner: '产品经理',
+                    startDate: '2025-01-16',
+                    endDate: '2025-01-31',
+                    progress: 100,
+                    parentId: 'root',
+                    children: ['goal1', 'goal2', 'goal3']
+                },
+                {
+                    id: 'goal1',
+                    label: 'KPI设定',
+                    type: 'task',
+                    status: 'completed',
+                    description: '设定关键绩效指标',
+                    owner: '产品经理',
+                    startDate: '2025-01-16',
+                    endDate: '2025-01-20',
+                    progress: 100,
+                    parentId: 'goal',
+                    children: []
+                },
+                {
+                    id: 'goal2',
+                    label: '里程碑定义',
+                    type: 'task',
+                    status: 'completed',
+                    description: '定义项目关键里程碑',
+                    owner: '产品经理',
+                    startDate: '2025-01-21',
+                    endDate: '2025-01-25',
+                    progress: 100,
+                    parentId: 'goal',
+                    children: []
+                },
+                {
+                    id: 'goal3',
+                    label: '目标分解',
+                    type: 'task',
+                    status: 'completed',
+                    description: '将目标分解到各团队',
+                    owner: '产品经理',
+                    startDate: '2025-01-26',
+                    endDate: '2025-01-31',
+                    progress: 100,
+                    parentId: 'goal',
+                    children: []
+                },
+                {
+                    id: 'planning',
+                    label: '规划层',
+                    type: 'level1',
+                    status: 'active',
+                    description: '制定详细的实施规划',
+                    owner: '架构师',
+                    startDate: '2025-02-01',
+                    endDate: '2025-02-28',
+                    progress: 60,
+                    parentId: 'root',
+                    children: ['plan1', 'plan2', 'plan3']
+                },
+                {
+                    id: 'plan1',
+                    label: '技术规划',
+                    type: 'task',
+                    status: 'completed',
+                    description: '技术架构和选型规划',
+                    owner: '架构师',
+                    startDate: '2025-02-01',
+                    endDate: '2025-02-10',
+                    progress: 100,
+                    parentId: 'planning',
+                    children: []
+                },
+                {
+                    id: 'plan2',
+                    label: '资源规划',
+                    type: 'task',
+                    status: 'active',
+                    description: '人力和资源配置规划',
+                    owner: '项目经理',
+                    startDate: '2025-02-11',
+                    endDate: '2025-02-20',
+                    progress: 50,
+                    parentId: 'planning',
+                    children: []
+                },
+                {
+                    id: 'plan3',
+                    label: '风险规划',
+                    type: 'task',
+                    status: 'active',
+                    description: '风险识别和应对规划',
+                    owner: '项目经理',
+                    startDate: '2025-02-21',
+                    endDate: '2025-02-28',
+                    progress: 40,
+                    parentId: 'planning',
+                    children: []
+                },
+                {
+                    id: 'execution',
+                    label: '执行层',
+                    type: 'level1',
+                    status: 'pending',
+                    description: '项目具体执行实施',
+                    owner: '技术经理',
+                    startDate: '2025-03-01',
+                    endDate: '2025-05-31',
+                    progress: 0,
+                    parentId: 'root',
+                    children: ['exec1', 'exec2']
+                },
+                {
+                    id: 'exec1',
+                    label: '项目管理',
+                    type: 'module',
+                    status: 'pending',
+                    description: '项目管理模块开发',
+                    owner: 'PM团队',
+                    startDate: '2025-03-01',
+                    endDate: '2025-04-15',
+                    progress: 0,
+                    parentId: 'execution',
+                    children: ['pm1', 'pm2', 'pm3']
+                },
+                {
+                    id: 'pm1',
+                    label: 'PM Agent开发',
+                    type: 'task',
+                    status: 'pending',
+                    description: '项目管理Agent核心功能开发',
+                    owner: '开发工程师',
+                    startDate: '2025-03-01',
+                    endDate: '2025-03-20',
+                    progress: 0,
+                    parentId: 'exec1',
+                    children: []
+                },
+                {
+                    id: 'pm2',
+                    label: '看板系统',
+                    type: 'task',
+                    status: 'active',
+                    description: '可视化看板系统开发',
+                    owner: '前端工程师',
+                    startDate: '2025-03-05',
+                    endDate: '2025-03-25',
+                    progress: 30,
+                    parentId: 'exec1',
+                    children: []
+                },
+                {
+                    id: 'pm3',
+                    label: '监控系统',
+                    type: 'task',
+                    status: 'pending',
+                    description: '项目进度监控系统',
+                    owner: '后端工程师',
+                    startDate: '2025-03-15',
+                    endDate: '2025-04-15',
+                    progress: 0,
+                    parentId: 'exec1',
+                    children: []
+                }
+            ],
+            
+            // 关系数据（用于关系图谱）
+            relations: [
+                { source: 'strategy', target: 'goal', type: 'dependency' },
+                { source: 'goal', target: 'planning', type: 'dependency' },
+                { source: 'planning', target: 'execution', type: 'dependency' },
+                { source: 'pm1', target: 'pm2', type: 'related' },
+                { source: 'pm2', target: 'pm3', type: 'related' },
+                { source: 'plan1', target: 'pm1', type: 'input' },
+                { source: 'plan2', target: 'pm1', type: 'input' }
+            ]
+        };
+
+        // ==================== 视图管理 ====================
+        let currentLayout = '1x1';
+        let viewConfigs = [
+            { type: 'mindmap', chart: null },
+            { type: 'gantt', chart: null },
+            { type: 'swimlane', chart: null },
+            { type: 'frame', chart: null }
+        ];
+        let selectedNode = null;
+        let contextMenuNode = null;
+
+        // 图表类型配置
+        const chartTypes = {
+            mindmap: { icon: '🧠', name: '脑图视图' },
+            gantt: { icon: '📅', name: '甘特图' },
+            swimlane: { icon: '🏊', name: '泳道视图' },
+            frame: { icon: '📐', name: '框图视图' },
+            flow: { icon: '🔄', name: '流程视图' },
+            relation: { icon: '🕸️', name: '关系图谱' }
+        };
+
+        console.log('[Init] Page loaded, chartTypes defined:', Object.keys(chartTypes));
+
+        // ==================== 布局切换 ====================
+        function changeLayout(layout) {
+            currentLayout = layout;
+            const mainLayout = document.getElementById('main-layout');
+            const sidebar = document.getElementById('sidebar');
+            
+            // 更新布局类名
+            mainLayout.className = `main-layout layout-${layout}`;
+            
+            // 更新按钮状态
+            document.querySelectorAll('.layout-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            if (event && event.target) {
+                event.target.closest('.layout-btn').classList.add('active');
+            }
+            
+            // 根据布局调整侧边栏
+            if (layout !== '1x1') {
+                sidebar.classList.add('compact');
+            } else {
+                sidebar.classList.remove('compact');
+            }
+            
+            // 重新创建视图容器
+            recreateViews();
+            
+            showToast(`已切换到${layout}布局`);
+        }
+
+        function recreateViews() {
+            const mainLayout = document.getElementById('main-layout');
+            const sidebar = document.getElementById('sidebar');
+            const detailPanel = document.querySelector('.detail-panel');
+            const existingViews = document.querySelectorAll('.view-container');
+            const viewCount = getViewCount(currentLayout);
+            
+            // 保存当前图表类型配置
+            existingViews.forEach((view, i) => {
+                if (viewConfigs[i]) {
+                    viewConfigs[i].type = view.getAttribute('data-chart-type') || viewConfigs[i].type;
+                }
+            });
+            
+            // 移除所有现有视图
+            existingViews.forEach(v => v.remove());
+            
+            // 创建新视图（插入到sidebar之后，detailPanel之前）
+            for (let i = 0; i < viewCount; i++) {
+                const viewDiv = createViewContainer(i);
+                // 确保插入在sidebar之后，detailPanel之前
+                if (sidebar && sidebar.nextSibling) {
+                    mainLayout.insertBefore(viewDiv, detailPanel);
+                } else {
+                    mainLayout.appendChild(viewDiv);
+                }
+                
+                // 初始化图表
+                setTimeout(() => {
+                    initChart(i, viewConfigs[i].type);
+                }, 100 * i);
+            }
+        }
+
+        function getViewCount(layout) {
+            switch(layout) {
+                case '1x1': return 1;
+                case '1x2': return 2;
+                case '2x1': return 2;
+                case '2x2': return 4;
+                default: return 1;
+            }
+        }
+
+        function createViewContainer(index) {
+            const div = document.createElement('div');
+            div.className = 'view-container';
+            div.id = `view-${index}`;
+            div.setAttribute('data-index', index);
+            
+            const config = viewConfigs[index] || { type: 'mindmap' };
+            const chartInfo = chartTypes[config.type] || chartTypes['mindmap'];
+            div.setAttribute('data-chart-type', config.type);
+            
+            div.innerHTML = `
+                <div class="view-header">
+                    <div class="view-title">
+                        <span id="view-icon-${index}">${chartInfo.icon}</span>
+                        <span id="view-title-${index}">${chartInfo.name}</span>
+                    </div>
+                    <div class="view-controls">
+                        <button class="view-btn" onclick="showChartSelector(${index})">切换</button>
+                        <button class="view-btn" onclick="zoomIn(${index})">+</button>
+                        <button class="view-btn" onclick="zoomOut(${index})">-</button>
+                        <button class="view-btn" onclick="resetView(${index})">⟲</button>
+                    </div>
+                </div>
+                <div class="chart-area">
+                    <div id="chart-${index}" class="chart-container"></div>
+                    <div class="chart-selector" id="selector-${index}">
+                        <div class="selector-title">选择图表类型</div>
+                        <div class="selector-grid">
+                            ${Object.entries(chartTypes).map(([key, info]) => `
+                                <div class="selector-item" onclick="selectChartType(${index}, '${key}')">
+                                    <div class="selector-icon">${info.icon}</div>
+                                    <div class="selector-label">${info.name}</div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // 点击视图设为焦点
+            div.addEventListener('click', () => {
+                document.querySelectorAll('.view-container').forEach(v => {
+                    v.classList.remove('focused');
+                });
+                div.classList.add('focused');
+            });
+            
+            return div;
+        }
+
+        // ==================== 图表选择器 ====================
+        function showChartSelector(index) {
+            const selector = document.getElementById(`selector-${index}`);
+            selector.classList.toggle('active');
+        }
+
+        function selectChartType(index, type) {
+            viewConfigs[index].type = type;
+            
+            // 更新标题
+            const info = chartTypes[type];
+            document.getElementById(`view-icon-${index}`).textContent = info.icon;
+            document.getElementById(`view-title-${index}`).textContent = info.name;
+            
+            // 隐藏选择器
+            document.getElementById(`selector-${index}`).classList.remove('active');
+            
+            // 重新初始化图表
+            setTimeout(() => {
+                initChart(index, type);
+            }, 100);
+        }
+
+        // ==================== 图表初始化 ====================
+        function initChart(index, type) {
+            const container = document.getElementById(`chart-${index}`);
+            if (!container) return;
+            
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            
+            // 销毁旧图表
+            if (viewConfigs[index].chart) {
+                viewConfigs[index].chart.destroy();
+            }
+            
+            let chart;
+            switch(type) {
+                case 'mindmap':
+                    chart = createMindmapChart(width, height, index);
+                    break;
+                case 'gantt':
+                    chart = createGanttChart(width, height, index);
+                    break;
+                case 'swimlane':
+                    chart = createSwimlaneChart(width, height, index);
+                    break;
+                case 'frame':
+                    chart = createFrameChart(width, height, index);
+                    break;
+                case 'flow':
+                    chart = createFlowChart(width, height, index);
+                    break;
+                case 'relation':
+                    chart = createRelationChart(width, height, index);
+                    break;
+            }
+            
+            viewConfigs[index].chart = chart;
+        }
+
+        // ==================== 创建脑图 ====================
+        function createMindmapChart(width, height, index) {
+            console.log('[Mindmap] Creating chart for index:', index, 'size:', width, 'x', height);
+
+            // 转换数据为树形结构
+            const treeData = convertToTree(projectData.nodes);
+            console.log('[Mindmap] Tree data converted, nodes:', treeData?.children?.length || 0);
+
+            try {
+            const graph = new G6.TreeGraph({
+                container: `chart-${index}`,
+                width,
+                height,
+                modes: {
+                    default: [
+                        'drag-canvas',
+                        'zoom-canvas',
+                        'drag-node',
+                        {
+                            type: 'collapse-expand',
+                            onChange: function(item, collapsed) {
+                                const data = item.get('model');
+                                data.collapsed = collapsed;
+                                return true;
+                            }
+                        }
+                    ]
+                },
+                layout: {
+                    type: 'mindmap',
+                    direction: 'H',
+                    getHeight: () => 40,
+                    getWidth: (node) => Math.max(100, (node.label?.length || 4) * 14 + 20),
+                    getVGap: () => 25,
+                    getHGap: () => 80
+                },
+                defaultNode: {
+                    type: 'rect',
+                    size: [120, 40],
+                    style: { radius: 6, cursor: 'pointer' }
+                },
+                defaultEdge: {
+                    type: 'cubic-horizontal',
+                    style: { lineWidth: 2 }
+                }
+            });
+
+            // 节点样式
+            graph.node(node => {
+                const status = node.status || 'pending';
+                const colors = {
+                    completed: { fill: '#d4edda', stroke: '#28a745', text: '#155724' },
+                    active: { fill: '#fff3cd', stroke: '#ffc107', text: '#856404' },
+                    pending: { fill: '#f8f9fa', stroke: '#6c757d', text: '#495057' }
+                };
+                const color = colors[status] || colors.pending;
+                
+                return {
+                    style: {
+                        fill: color.fill,
+                        stroke: color.stroke,
+                        lineWidth: selectedNode?.id === node.id ? 3 : 2
+                    },
+                    labelCfg: {
+                        style: {
+                            fill: color.text,
+                            fontSize: 12,
+                            fontWeight: status === 'active' ? 600 : 400
+                        }
+                    }
+                };
+            });
+
+            // 事件绑定
+            graph.on('node:click', (evt) => {
+                const node = evt.item;
+                selectedNode = node.getModel();
+                updateDetailPanel();
+                syncSelectionToAllViews();
+            });
+
+            graph.on('node:contextmenu', (evt) => {
+                evt.preventDefault();
+                contextMenuNode = evt.item.getModel();
+                showContextMenu(evt.canvasX, evt.canvasY);
+            });
+
+            graph.on('node:dblclick', (evt) => {
+                selectedNode = evt.item.getModel();
+                updateDetailPanel();
+            });
+
+            graph.data(treeData);
+            graph.render();
+            graph.fitCenter();
+
+            console.log('[Mindmap] Chart rendered successfully');
+            return graph;
+            } catch(e) {
+                console.error('[Mindmap] Error creating chart:', e.message);
+                return null;
+            }
+        }
+
+        // ==================== 创建甘特图 ====================
+        function createGanttChart(width, height, index) {
+            const container = document.getElementById(`chart-${index}`);
+            
+            // 创建甘特图容器
+            container.innerHTML = '';
+            const ganttDiv = document.createElement('div');
+            ganttDiv.className = 'gantt-container';
+            ganttDiv.style.width = '100%';
+            ganttDiv.style.height = '100%';
+            ganttDiv.style.overflow = 'auto';
+            container.appendChild(ganttDiv);
+            
+            // 计算时间范围
+            const tasks = projectData.nodes.filter(n => n.startDate && n.endDate);
+            const startDate = new Date(Math.min(...tasks.map(t => new Date(t.startDate))));
+            const endDate = new Date(Math.max(...tasks.map(t => new Date(t.endDate))));
+            const days = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24));
+            
+            // 创建甘特图表格
+            const table = document.createElement('table');
+            table.style.width = `${Math.max(width, days * 30 + 300)}px`;
+            table.style.borderCollapse = 'collapse';
+            table.style.fontSize = '12px';
+            
+            // 表头
+            const thead = document.createElement('thead');
+            thead.innerHTML = `
+                <tr style="background: #f5f5f5;">
+                    <th style="width: 200px; padding: 8px; text-align: left; border: 1px solid #e8e8e8;">任务名称</th>
+                    <th style="width: 100px; padding: 8px; text-align: left; border: 1px solid #e8e8e8;">负责人</th>
+                    <th style="width: 80px; padding: 8px; text-align: center; border: 1px solid #e8e8e8;">进度</th>
+                    ${generateDateHeaders(startDate, days)}
+                </tr>
+            `;
+            table.appendChild(thead);
+            
+            // 表体
+            const tbody = document.createElement('tbody');
+            tasks.forEach(task => {
+                const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = () => {
+                    selectedNode = task;
+                    updateDetailPanel();
+                };
+                
+                const taskStart = new Date(task.startDate);
+                const taskEnd = new Date(task.endDate);
+                const startOffset = Math.ceil((taskStart - startDate) / (1000 * 60 * 60 * 24));
+                const duration = Math.ceil((taskEnd - taskStart) / (1000 * 60 * 60 * 24));
+                
+                const statusColor = {
+                    completed: '#28a745',
+                    active: '#ffc107',
+                    pending: '#6c757d'
+                }[task.status] || '#6c757d';
+                
+                tr.innerHTML = `
+                    <td style="padding: 8px; border: 1px solid #e8e8e8; font-weight: 500;">${task.label}</td>
+                    <td style="padding: 8px; border: 1px solid #e8e8e8;">${task.owner}</td>
+                    <td style="padding: 8px; border: 1px solid #e8e8e8; text-align: center;">${task.progress}%</td>
+                    ${generateGanttCells(startOffset, duration, days, statusColor, task.progress)}
+                `;
+                tbody.appendChild(tr);
+            });
+            table.appendChild(tbody);
+            ganttDiv.appendChild(table);
+            
+            return { destroy: () => {} };
+        }
+
+        function generateDateHeaders(startDate, days) {
+            let headers = '';
+            for (let i = 0; i < days; i++) {
+                const date = new Date(startDate);
+                date.setDate(date.getDate() + i);
+                headers += `<th style="width: 30px; padding: 4px 2px; text-align: center; border: 1px solid #e8e8e8; font-size: 10px;">${date.getMonth() + 1}/${date.getDate()}</th>`;
+            }
+            return headers;
+        }
+
+        function generateGanttCells(startOffset, duration, totalDays, color, progress) {
+            let cells = '';
+            for (let i = 0; i < totalDays; i++) {
+                if (i >= startOffset && i < startOffset + duration) {
+                    const opacity = i < startOffset + (duration * progress / 100) ? 1 : 0.3;
+                    cells += `<td style="border: 1px solid #e8e8e8; background: ${color}; opacity: ${opacity};"></td>`;
+                } else {
+                    cells += `<td style="border: 1px solid #e8e8e8;"></td>`;
+                }
+            }
+            return cells;
+        }
+
+        // ==================== 创建其他图表 ====================
+        function createSwimlaneChart(width, height, index) {
+            const graph = new G6.Graph({
+                container: `chart-${index}`,
+                width,
+                height,
+                modes: { default: ['drag-canvas', 'zoom-canvas'] },
+                defaultNode: {
+                    type: 'rect',
+                    size: [100, 40],
+                    style: { radius: 6, fill: '#e6f7ff', stroke: '#1890ff', lineWidth: 2 }
+                }
+            });
+
+            const owners = [...new Set(projectData.nodes.map(n => n.owner))];
+            const lanes = owners.map((owner, i) => ({
+                id: `lane-${i}`,
+                label: owner,
+                y: 60 + i * 80
+            }));
+
+            const nodes = projectData.nodes
+                .filter(n => n.owner)
+                .map((n, i) => ({
+                    id: n.id,
+                    label: n.label,
+                    x: 100 + i * 120,
+                    y: lanes.find(l => l.label === n.owner)?.y || 100
+                }));
+
+            const edges = projectData.nodes
+                .filter(n => n.parentId && n.parentId !== 'root')
+                .map(n => ({
+                    source: n.parentId,
+                    target: n.id
+                }));
+
+            graph.data({ nodes, edges });
+            graph.render();
+
+            return graph;
+        }
+
+        function createFrameChart(width, height, index) {
+            const graph = new G6.Graph({
+                container: `chart-${index}`,
+                width,
+                height,
+                modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
+                layout: { type: 'dagre', rankdir: 'TB', nodesep: 50, ranksep: 80 },
+                defaultNode: {
+                    type: 'rect',
+                    size: [120, 60],
+                    style: { radius: 8, fill: '#f6ffed', stroke: '#52c41a', lineWidth: 2 }
+                }
+            });
+
+            const nodes = projectData.nodes
+                .filter(n => n.type === 'level1' || n.type === 'module')
+                .map(n => ({ id: n.id, label: n.label }));
+
+            const edges = projectData.nodes
+                .filter(n => n.parentId && n.parentId !== 'root')
+                .map(n => ({ source: n.parentId, target: n.id }));
+
+            graph.data({ nodes, edges });
+            graph.render();
+            graph.fitCenter();
+
+            return graph;
+        }
+
+        function createFlowChart(width, height, index) {
+            const graph = new G6.Graph({
+                container: `chart-${index}`,
+                width,
+                height,
+                modes: { default: ['drag-canvas', 'zoom-canvas'] }
+            });
+
+            const flowNodes = [
+                { id: 'strategy', label: '战略制定', x: 80, y: height / 2 },
+                { id: 'goal', label: '目标分解', x: 200, y: height / 2 },
+                { id: 'planning', label: '规划编制', x: 320, y: height / 2 },
+                { id: 'execution', label: '项目执行', x: 440, y: height / 2 },
+                { id: 'result', label: '业务成果', x: 560, y: height / 2 }
+            ];
+
+            const edges = [
+                { source: 'strategy', target: 'goal' },
+                { source: 'goal', target: 'planning' },
+                { source: 'planning', target: 'execution' },
+                { source: 'execution', target: 'result' }
+            ];
+
+            graph.data({ nodes: flowNodes, edges });
+            graph.render();
+
+            return graph;
+        }
+
+        function createRelationChart(width, height, index) {
+            const graph = new G6.Graph({
+                container: `chart-${index}`,
+                width,
+                height,
+                modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
+                layout: { type: 'force', preventOverlap: true, linkDistance: 100 },
+                defaultNode: {
+                    size: 50,
+                    style: { fill: '#e6f7ff', stroke: '#1890ff' }
+                }
+            });
+
+            const nodes = projectData.nodes.slice(0, 10).map(n => ({
+                id: n.id,
+                label: n.label,
+                size: n.children?.length > 0 ? 60 : 40
+            }));
+
+            graph.data({
+                nodes,
+                edges: projectData.relations
+            });
+            graph.render();
+
+            return graph;
+        }
+
+        // ==================== 数据转换 ====================
+        function convertToTree(nodes) {
+            const root = { ...projectData.project, children: [] };
+            const nodeMap = { [root.id]: root };
+            
+            nodes.forEach(node => {
+                nodeMap[node.id] = { ...node, children: [] };
+            });
+            
+            nodes.forEach(node => {
+                if (node.parentId && nodeMap[node.parentId]) {
+                    nodeMap[node.parentId].children.push(nodeMap[node.id]);
+                } else if (!node.parentId || node.parentId === 'root') {
+                    root.children.push(nodeMap[node.id]);
+                }
+            });
+            
+            return root;
+        }
+
+        // ==================== 数据联动 ====================
+        function syncAllViews() {
+            viewConfigs.forEach((config, index) => {
+                if (config.chart) {
+                    initChart(index, config.type);
+                }
+            });
+            showToast('所有视图已同步');
+        }
+
+        function syncSelectionToAllViews() {
+            viewConfigs.forEach((config, index) => {
+                if (config.chart && config.type === 'mindmap') {
+                    const node = config.chart.findById(selectedNode?.id);
+                    if (node) {
+                        config.chart.setItemState(node, 'selected', true);
+                    }
+                }
+            });
+        }
+
+        // ==================== 节点操作 ====================
+        function addNode() {
+            if (!selectedNode) {
+                showToast('请先选择一个父节点');
+                return;
+            }
+            
+            const label = prompt('请输入新节点名称：');
+            if (!label) return;
+            
+            const newNode = {
+                id: 'node_' + Date.now(),
+                label: label,
+                type: 'task',
+                status: 'pending',
+                description: '',
+                owner: '',
+                progress: 0,
+                startDate: new Date().toISOString().split('T')[0],
+                endDate: new Date().toISOString().split('T')[0],
+                parentId: selectedNode.id,
+                children: []
+            };
+            
+            projectData.nodes.push(newNode);
+            
+            // 更新父节点的children
+            const parent = projectData.nodes.find(n => n.id === selectedNode.id);
+            if (parent) {
+                if (!parent.children) parent.children = [];
+                parent.children.push(newNode.id);
+            }
+            
+            syncAllViews();
+            updateDetailPanel();
+            showToast('节点添加成功');
+        }
+
+        function addChildNode() {
+            hideContextMenu();
+            if (contextMenuNode) {
+                selectedNode = contextMenuNode;
+                addNode();
+            }
+        }
+
+        function editNode() {
+            hideContextMenu();
+            if (contextMenuNode) {
+                selectedNode = contextMenuNode;
+                updateDetailPanel();
+            }
+        }
+
+        function deleteNode() {
+            hideContextMenu();
+            if (contextMenuNode && contextMenuNode.id !== 'root') {
+                if (confirm(`确定要删除节点 "${contextMenuNode.label}" 吗？`)) {
+                    // 从数据中移除
+                    const index = projectData.nodes.findIndex(n => n.id === contextMenuNode.id);
+                    if (index > -1) {
+                        projectData.nodes.splice(index, 1);
+                    }
+                    
+                    // 从父节点的children中移除
+                    const parent = projectData.nodes.find(n => n.children?.includes(contextMenuNode.id));
+                    if (parent) {
+                        parent.children = parent.children.filter(id => id !== contextMenuNode.id);
+                    }
+                    
+                    selectedNode = null;
+                    syncAllViews();
+                    updateDetailPanel();
+                    showToast('节点已删除');
+                }
+            }
+        }
+
+        // ==================== 详情面板 ====================
+        function updateDetailPanel() {
+            const container = document.getElementById('detail-content');
+            
+            if (!selectedNode) {
+                container.innerHTML = `
+                    <div class="detail-empty">
+                        <div class="detail-empty-icon">📊</div>
+                        <div>点击图表中的节点<br>查看和编辑详情</div>
+                    </div>
+                `;
+                return;
+            }
+
+            const node = projectData.nodes.find(n => n.id === selectedNode.id) || selectedNode;
+            const statusText = { completed: '已完成', active: '进行中', pending: '待开始' }[node.status] || '待开始';
+            const statusClass = { completed: 'status-completed', active: 'status-active', pending: 'status-pending' }[node.status] || 'status-pending';
+            
+            container.innerHTML = `
+                <div class="detail-section">
+                    <div class="detail-section-title">基本信息</div>
+                    <div class="detail-field">
+                        <div class="detail-label">节点名称</div>
+                        <input type="text" class="detail-input" value="${node.label}" 
+                               onchange="updateNodeData('${node.id}', 'label', this.value)">
+                    </div>
+                    <div class="detail-field">
+                        <div class="detail-label">状态</div>
+                        <select class="detail-select" onchange="updateNodeData('${node.id}', 'status', this.value)">
+                            <option value="pending" ${node.status === 'pending' ? 'selected' : ''}>待开始</option>
+                            <option value="active" ${node.status === 'active' ? 'selected' : ''}>进行中</option>
+                            <option value="completed" ${node.status === 'completed' ? 'selected' : ''}>已完成</option>
+                        </select>
+                        <div style="margin-top: 6px;">
+                            <span class="status-tag ${statusClass}">${statusText}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <div class="detail-section-title">时间安排</div>
+                    <div class="detail-field">
+                        <div class="detail-label">开始日期</div>
+                        <input type="date" class="detail-input" value="${node.startDate || ''}" 
+                               onchange="updateNodeData('${node.id}', 'startDate', this.value)">
+                    </div>
+                    <div class="detail-field">
+                        <div class="detail-label">结束日期</div>
+                        <input type="date" class="detail-input" value="${node.endDate || ''}" 
+                               onchange="updateNodeData('${node.id}', 'endDate', this.value)">
+                    </div>
+                    <div class="detail-field">
+                        <div class="detail-label">进度 (${node.progress || 0}%)</div>
+                        <input type="range" class="detail-input" min="0" max="100" value="${node.progress || 0}" 
+                               onchange="updateNodeData('${node.id}', 'progress', this.value)">
+                    </div>
+                </div>
+
+                <div class="detail-section">
+                    <div class="detail-section-title">其他信息</div>
+                    <div class="detail-field">
+                        <div class="detail-label">负责人</div>
+                        <input type="text" class="detail-input" value="${node.owner || ''}" 
+                               onchange="updateNodeData('${node.id}', 'owner', this.value)">
+                    </div>
+                    <div class="detail-field">
+                        <div class="detail-label">描述</div>
+                        <textarea class="detail-textarea" 
+                                  onchange="updateNodeData('${node.id}', 'description', this.value)">${node.description || ''}</textarea>
+                    </div>
+                </div>
+
+                <div class="detail-actions">
+                    <button class="detail-btn" onclick="addNode()">添加子节点</button>
+                    ${node.id !== 'root' ? `<button class="detail-btn danger" onclick="deleteNodeById('${node.id}')">删除</button>` : ''}
+                </div>
+            `;
+        }
+
+        function updateNodeData(id, field, value) {
+            const node = projectData.nodes.find(n => n.id === id);
+            if (node) {
+                if (field === 'progress') {
+                    node[field] = parseInt(value) || 0;
+                } else {
+                    node[field] = value;
+                }
+                syncAllViews();
+                showToast(`${field}已更新`);
+            }
+        }
+
+        function deleteNodeById(id) {
+            if (confirm('确定要删除这个节点吗？')) {
+                const index = projectData.nodes.findIndex(n => n.id === id);
+                if (index > -1) {
+                    projectData.nodes.splice(index, 1);
+                    const parent = projectData.nodes.find(n => n.children?.includes(id));
+                    if (parent) {
+                        parent.children = parent.children.filter(cid => cid !== id);
+                    }
+                    selectedNode = null;
+                    syncAllViews();
+                    updateDetailPanel();
+                    showToast('节点已删除');
+                }
+            }
+        }
+
+        // ==================== 工具栏功能 ====================
+        function zoomIn(index) {
+            const chart = viewConfigs[index]?.chart;
+            if (chart && chart.zoomTo) {
+                chart.zoomTo(chart.getZoom() * 1.2);
+            }
+        }
+
+        function zoomOut(index) {
+            const chart = viewConfigs[index]?.chart;
+            if (chart && chart.zoomTo) {
+                chart.zoomTo(chart.getZoom() * 0.8);
+            }
+        }
+
+        function resetView(index) {
+            const chart = viewConfigs[index]?.chart;
+            if (chart) {
+                chart.fitCenter();
+                chart.zoomTo(1);
+            }
+        }
+
+        function exportData() {
+            const dataStr = JSON.stringify(projectData, null, 2);
+            const blob = new Blob([dataStr], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'project-data.json';
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('数据已导出');
+        }
+
+        function resetAllData() {
+            if (confirm('确定要重置所有数据吗？这将恢复到初始状态。')) {
+                location.reload();
+            }
+        }
+
+        // ==================== UI辅助功能 ====================
+        function showContextMenu(x, y) {
+            const menu = document.getElementById('context-menu');
+            menu.style.display = 'block';
+            menu.style.left = x + 'px';
+            menu.style.top = y + 'px';
+        }
+
+        function hideContextMenu() {
+            document.getElementById('context-menu').style.display = 'none';
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.classList.add('show');
+            setTimeout(() => toast.classList.remove('show'), 2000);
+        }
+
+        function setChartType(type) {
+            // 更新侧边栏选中状态
+            document.querySelectorAll('.menu-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            document.querySelector(`[data-chart="${type}"]`).classList.add('active');
+            
+            // 更新第一个视图的图表类型
+            selectChartType(0, type);
+        }
+
+        // ==================== 事件监听 ====================
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.context-menu') && !e.target.closest('.chart-selector')) {
+                hideContextMenu();
+                document.querySelectorAll('.chart-selector').forEach(s => s.classList.remove('active'));
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            setTimeout(syncAllViews, 300);
+        });
+
+        // Global error handler
+        window.addEventListener('error', (e) => {
+            console.error('[Error]', e.message, '\n', e.stack);
+        });
+
+        // ==================== 初始化 ====================
+        window.addEventListener('load', () => {
+            console.log('[Load] Window loaded');
+
+            setTimeout(() => {
+                console.log('[Init] Starting initialization...');
+                console.log('[Init] Current layout:', currentLayout);
+                console.log('[Init] View configs:', viewConfigs.length);
+
+                // 确保初始布局正确
+                currentLayout = '1x1';
+                document.querySelector('.main-layout').className = 'main-layout layout-1x1';
+                console.log('[Init] Set layout to 1x1');
+
+                // 初始化第一个视图
+                const container = document.getElementById('chart-0');
+                console.log('[Init] Chart container found:', !!container);
+
+                if (container) {
+                    const width = container.clientWidth;
+                    const height = container.clientHeight;
+                    console.log('[Init] Container size:', width, 'x', height);
+                    console.log('[Init] Creating mindmap chart...');
+                    viewConfigs[0].chart = createMindmapChart(width, height, 0);
+                    console.log('[Init] Chart created:', !!viewConfigs[0].chart);
+                } else {
+                    console.error('[Init] ERROR: chart-0 container not found!');
+                }
+            }, 200);
+        });
+    </script>
+</body>
+</html>
