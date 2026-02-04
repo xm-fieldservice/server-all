@@ -1524,38 +1524,324 @@
             return graph;
         }
 
+        // ==================== 完整框图功能 ====================
+        let frameGraphs = {};
+        let frameSelectedNode = null;
+        let frameSelectedEdge = null;
+        let frameEdgeMode = false;
+        let frameEdgeSource = null;
+
         function createFrameChart(width, height, index) {
+            const containerId = `chart-${index}`;
+            const container = document.getElementById(containerId);
+
+            // 清空容器并添加完整UI
+            container.innerHTML = `
+                <div class="frame-toolbar">
+                    <span class="frame-title">📐 框图模式</span>
+                    <div class="frame-toolbar-actions">
+                        <button class="frame-btn" onclick="toggleFrameEdgeMode(${index})">🔗 连线</button>
+                        <button class="frame-btn" onclick="fitFrameView(${index})">🔍 适应</button>
+                        <button class="frame-btn" onclick="exportFrameData(${index})">📋 导出</button>
+                    </div>
+                </div>
+                <div class="frame-content">
+                    <div class="frame-canvas" id="frame-canvas-${index}"></div>
+                </div>
+                <div class="frame-tooltip" id="frame-tooltip-${index}"></div>
+            `;
+
+            const canvasEl = document.getElementById(`frame-canvas-${index}`);
+
+            // 注册自定义节点
+            if (!G6.registerNode['frame-node']) {
+                G6.registerNode('frame-node', {
+                    draw(cfg, group) {
+                        const shapeType = cfg.shapeType || 'rect';
+                        const size = cfg.size || [120, 50];
+                        const fill = cfg.style?.fill || '#e6f7ff';
+                        const stroke = cfg.style?.stroke || '#1890ff';
+                        const label = cfg.label || '';
+                        let keyShape;
+
+                        if (shapeType === 'circle') {
+                            keyShape = group.addShape('circle', {
+                                attrs: {
+                                    x: 0, y: 0, r: size[0] / 2,
+                                    fill, stroke, lineWidth: 2,
+                                    cursor: 'pointer'
+                                }
+                            });
+                        } else if (shapeType === 'diamond') {
+                            keyShape = group.addShape('path', {
+                                attrs: {
+                                    path: [['M', 0, -size[1] / 2], ['L', size[0] / 2, 0], ['L', 0, size[1] / 2], ['L', -size[0] / 2, 0], ['Z']],
+                                    fill, stroke, lineWidth: 2,
+                                    cursor: 'pointer'
+                                }
+                            });
+                        } else if (shapeType === 'ellipse') {
+                            keyShape = group.addShape('ellipse', {
+                                attrs: {
+                                    x: 0, y: 0, rx: size[0] / 2, ry: size[1] / 2,
+                                    fill, stroke, lineWidth: 2,
+                                    cursor: 'pointer'
+                                }
+                            });
+                        } else {
+                            keyShape = group.addShape('rect', {
+                                attrs: {
+                                    x: -size[0] / 2, y: -size[1] / 2,
+                                    width: size[0], height: size[1],
+                                    radius: 4, fill, stroke, lineWidth: 2,
+                                    cursor: 'pointer'
+                                }
+                            });
+                        }
+
+                        group.addShape('text', {
+                            attrs: {
+                                text: label,
+                                x: 0, y: 0,
+                                textAlign: 'center', textBaseline: 'middle',
+                                fill: '#333', fontSize: 12
+                            }
+                        });
+
+                        return keyShape;
+                    },
+                    setState(name, value, item) {
+                        const shape = item.getContainer().get('children')[0];
+                        if (name === 'selected') {
+                            shape.attr('stroke', value ? '#ff6b6b' : (item.getModel().style?.stroke || '#1890ff'));
+                            shape.attr('lineWidth', value ? 3 : 2);
+                        }
+                        if (name === 'edge-source') {
+                            shape.attr('shadowBlur', value ? 15 : 0);
+                            shape.attr('shadowColor', '#ff6b6b');
+                        }
+                    }
+                });
+            }
+
             const graph = new G6.Graph({
-                container: `chart-${index}`,
-                width,
-                height,
-                modes: { default: ['drag-canvas', 'zoom-canvas', 'drag-node'] },
-                layout: { type: 'dagre', rankdir: 'TB', nodesep: 50, ranksep: 80 },
+                container: canvasEl,
+                width: width,
+                height: height - 40,
+                modes: {
+                    default: ['drag-canvas', 'zoom-canvas', 'drag-node', 'click-select']
+                },
                 defaultNode: {
-                    type: 'rect',
-                    size: [120, 60],
-                    style: { radius: 8, fill: '#f6ffed', stroke: '#52c41a', lineWidth: 2 }
+                    type: 'frame-node',
+                    size: [120, 50],
+                    style: { fill: '#e6f7ff', stroke: '#1890ff' }
+                },
+                defaultEdge: {
+                    type: 'line',
+                    style: {
+                        stroke: '#666',
+                        lineWidth: 2,
+                        endArrow: { path: G6.Arrow.triangle(8, 10, 0), fill: '#666' }
+                    }
                 }
             });
 
+            // 从 projectData 加载节点
             const nodes = projectData.nodes
                 .filter(n => n.type === 'level1' || n.type === 'module')
-                .map(n => ({ id: n.id, label: n.label }));
+                .map((n, i) => ({
+                    id: n.id,
+                    label: n.label,
+                    x: 100 + (i % 3) * 200,
+                    y: 80 + Math.floor(i / 3) * 120,
+                    shapeType: 'rect',
+                    style: {
+                        fill: n.status === 'completed' ? '#d4edda' : (n.status === 'active' ? '#fff3cd' : '#f8f9fa'),
+                        stroke: n.status === 'completed' ? '#28a745' : (n.status === 'active' ? '#ffc107' : '#6c757d')
+                    }
+                }));
 
-            // 只保留源和目标都在 nodes 中的边
             const nodeIds = new Set(nodes.map(n => n.id));
             const edges = projectData.nodes
                 .filter(n => n.parentId && n.parentId !== 'root' && nodeIds.has(n.parentId) && nodeIds.has(n.id))
                 .map(n => ({ source: n.parentId, target: n.id }));
 
-            console.log('[Frame] Nodes:', nodes.length, 'Edges:', edges.length);
-
             graph.data({ nodes, edges });
             graph.render();
-            graph.fitCenter();
 
-            return graph;
+            // 节点点击事件
+            graph.on('node:click', (evt) => {
+                const node = evt.item;
+
+                if (frameEdgeMode) {
+                    // 连线模式
+                    if (!frameEdgeSource) {
+                        frameEdgeSource = node;
+                        node.setState('edge-source', true);
+                        showFrameTooltip(index, '已选择起点，点击终点节点');
+                    } else {
+                        const sourceId = frameEdgeSource.getModel().id;
+                        const targetId = node.getModel().id;
+
+                        if (sourceId === targetId) {
+                            showFrameTooltip(index, '不能连接同一个节点');
+                        } else {
+                            const exists = graph.getEdges().some(e => {
+                                const m = e.getModel();
+                                return m.source === sourceId && m.target === targetId;
+                            });
+
+                            if (exists) {
+                                showFrameTooltip(index, '连线已存在');
+                            } else {
+                                graph.addItem('edge', {
+                                    source: sourceId,
+                                    target: targetId
+                                });
+                                showFrameTooltip(index, '连线创建成功');
+                            }
+                        }
+
+                        frameEdgeSource.setState('edge-source', false);
+                        frameEdgeSource = null;
+                    }
+                } else {
+                    // 选中节点
+                    if (frameSelectedNode) {
+                        frameSelectedNode.clearStates('selected');
+                    }
+                    if (frameSelectedEdge) {
+                        frameSelectedEdge.clearStates('selected');
+                        frameSelectedEdge = null;
+                    }
+                    frameSelectedNode = node;
+                    frameSelectedNode.setState('selected', true);
+                }
+            });
+
+            // 画布点击事件
+            graph.on('canvas:click', () => {
+                if (frameEdgeMode && frameEdgeSource) {
+                    frameEdgeSource.setState('edge-source', false);
+                    frameEdgeSource = null;
+                }
+                if (frameSelectedNode) {
+                    frameSelectedNode.clearStates('selected');
+                    frameSelectedNode = null;
+                }
+            });
+
+            frameGraphs[index] = graph;
+            console.log('[Frame] 框图已创建，节点:', nodes.length, '边:', edges.length);
+
+            return {
+                destroy: function() {
+                    container.innerHTML = '';
+                    frameGraphs[index] = null;
+                },
+                fitCenter: function() {
+                    graph.fitCenter();
+                }
+            };
         }
+
+        function toggleFrameEdgeMode(index) {
+            frameEdgeMode = !frameEdgeMode;
+            if (frameEdgeMode && frameEdgeSource) {
+                frameEdgeSource.setState('edge-source', false);
+                frameEdgeSource = null;
+            }
+            showFrameTooltip(index, frameEdgeMode ? '连线模式：依次点击两个节点' : '已退出连线模式');
+        }
+
+        function fitFrameView(index) {
+            const graph = frameGraphs[index];
+            if (graph) {
+                graph.fitCenter();
+                showFrameTooltip(index, '已适应视图');
+            }
+        }
+
+        function exportFrameData(index) {
+            const graph = frameGraphs[index];
+            if (graph) {
+                const data = graph.save();
+                console.log('[Frame] 导出数据:', data);
+                showFrameTooltip(index, '数据已导出（见控制台）');
+            }
+        }
+
+        function showFrameTooltip(index, message) {
+            const tooltip = document.getElementById(`frame-tooltip-${index}`);
+            if (tooltip) {
+                tooltip.textContent = message;
+                tooltip.classList.add('active');
+                setTimeout(() => tooltip.classList.remove('active'), 2000);
+            }
+        }
+
+        // 框图样式
+        const frameStyle = document.createElement('style');
+        frameStyle.textContent = `
+            .frame-toolbar {
+                height: 40px;
+                background: #fafbfc;
+                border-bottom: 1px solid #e8e8e8;
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 0 12px;
+            }
+            .frame-title {
+                font-size: 13px;
+                font-weight: 600;
+                color: #333;
+            }
+            .frame-toolbar-actions {
+                display: flex;
+                gap: 6px;
+            }
+            .frame-btn {
+                padding: 4px 10px;
+                border: 1px solid #d9d9d9;
+                background: #fff;
+                border-radius: 3px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: all 0.2s;
+            }
+            .frame-btn:hover {
+                border-color: #667eea;
+                color: #667eea;
+            }
+            .frame-content {
+                flex: 1;
+                position: relative;
+                overflow: hidden;
+            }
+            .frame-canvas {
+                width: 100%;
+                height: 100%;
+            }
+            .frame-tooltip {
+                position: absolute;
+                bottom: 10px;
+                left: 50%;
+                transform: translateX(-50%);
+                background: rgba(0,0,0,0.75);
+                color: #fff;
+                padding: 6px 12px;
+                border-radius: 4px;
+                font-size: 12px;
+                display: none;
+                z-index: 100;
+            }
+            .frame-tooltip.active {
+                display: block;
+            }
+        `;
+        document.head.appendChild(frameStyle);
+
 
         function createFlowChart(width, height, index) {
             const graph = new G6.Graph({
