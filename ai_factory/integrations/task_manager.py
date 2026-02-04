@@ -16,6 +16,7 @@ import threading
 import time
 import requests
 from dataclasses import dataclass, field
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,15 @@ logger = logging.getLogger(__name__)
 
 # 默认API基础URL
 DEFAULT_API_BASE = "http://localhost:8001"
+
+# 队列与执行策略（可通过环境变量覆盖）
+MAX_QUEUE_SIZE = int(os.getenv("ACCESS_MAX_QUEUE", "50"))
+MAX_RETRIES = int(os.getenv("ACCESS_TASK_MAX_RETRIES", "2"))
+
+
+class QueueFullError(Exception):
+    """队列已满错误"""
+    pass
 
 
 @dataclass
@@ -57,6 +67,8 @@ class IngestJob:
     error_message: Optional[str] = None
     entry_id: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+    task_payload: Optional[Dict[str, Any]] = None  # RAG/WEB 任务入参
+    retries_attempted: int = 0
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
 
@@ -99,6 +111,9 @@ class TaskManager:
             self._queue: List[str] = []
             self._running_jobs: set = set()
             self._stop_event = threading.Event()
+            self._queue_lock = threading.Lock()
+            self._jobs_lock = threading.Lock()
+            self._idempotency_map: Dict[str, str] = {}
 
             # 启动工作线程
             self._worker_thread = threading.Thread(
@@ -132,37 +147,48 @@ class TaskManager:
         # 计算payload hash
         payload_hash = self._hash_payload(payload)
 
-        # 幂等性检查：如果相同payload已存在，返回已有的job_id
-        if idempotency_key:
-            # 从idempotency_key反推payload_hash（简化处理）
-            idemp_hash = hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
-            for job_id, job in self._jobs.items():
-                if job.payload_hash == idemp_hash and job.task_type == task_type:
-                    logger.info(f"Job {job_id} 已存在，返回已有任务")
-                    return job_id
-        else:
-            # 基于payload_hash查找
+        # 幂等性检查：优先使用显式 idempotency_key
+        with self._jobs_lock:
+            if idempotency_key:
+                existing = self._idempotency_map.get(idempotency_key)
+                if existing and existing in self._jobs:
+                    logger.info(f"Job {existing} 已存在（幂等键），返回已有任务")
+                    return existing
+
+            # 其次基于 payload_hash 去重（同类型任务）
             for job_id, job in self._jobs.items():
                 if job.payload_hash == payload_hash and job.task_type == task_type:
                     logger.info(f"Job {job_id} 已存在，返回已有任务")
                     return job_id
 
-        # 创建新任务
-        job_id = f"job_{uuid4().hex[:12]}"
-        raw_text = payload.get("raw_text", "")
+            # 队列背压：限制总挂起任务量
+            total_pending = len(self._queue) + len(self._running_jobs)
+            if total_pending >= MAX_QUEUE_SIZE:
+                raise QueueFullError(f"队列已满: {total_pending} >= {MAX_QUEUE_SIZE}")
 
-        job = IngestJob(
-            job_id=job_id,
-            payload_hash=payload_hash,
-            raw_text=raw_text,
-            task_type=task_type,
-            status="queued",
+            # 创建新任务
+            job_id = f"job_{uuid4().hex[:12]}"
+            raw_text = payload.get("raw_text", "")
+
+            job = IngestJob(
+                job_id=job_id,
+                payload_hash=payload_hash,
+                raw_text=raw_text,
+                task_type=task_type,
+                status="queued",
+                task_payload=dict(payload) if isinstance(payload, dict) else None,
+            )
+
+            self._jobs[job_id] = job
+            if idempotency_key:
+                self._idempotency_map[idempotency_key] = job_id
+
+        with self._queue_lock:
+            self._queue.append(job_id)
+
+        logger.info(
+            f"任务已提交: job_id={job_id}, task_type={task_type.value}, raw_text_len={len(raw_text)}"
         )
-
-        self._jobs[job_id] = job
-        self._queue.append(job_id)
-
-        logger.info(f"任务已提交: job_id={job_id}, task_type={task_type.value}, raw_text_len={len(raw_text)}")
 
         return job_id
 
@@ -174,15 +200,19 @@ class TaskManager:
             time.sleep(0.1)  # 避免忙等待
 
             # 从队列中取任务
-            while self._queue:
-                job_id = self._queue.pop(0)
+            while True:
+                with self._queue_lock:
+                    if not self._queue:
+                        break
+                    job_id = self._queue.pop(0)
 
                 # 如果任务已经在运行，跳过
                 if job_id in self._running_jobs:
                     continue
 
                 # 获取任务
-                job = self._jobs.get(job_id)
+                with self._jobs_lock:
+                    job = self._jobs.get(job_id)
                 if job is None or job.status in ["succeeded", "failed"]:
                     continue
 
@@ -198,37 +228,57 @@ class TaskManager:
                     daemon=True,
                 ).start()
 
-            # 清理已完成的运行状态
-            self._running_jobs = {
-                job_id for job_id in self._running_jobs
-                if self._jobs.get(job_id, {}).get("status") in ["succeeded", "failed"]
-            }
+            # 清理已完成的运行状态（保留仍在进行的）
+            cleaned = set()
+            for job_id in list(self._running_jobs):
+                with self._jobs_lock:
+                    job = self._jobs.get(job_id)
+                if job is None:
+                    continue
+                if getattr(job, "status", None) not in ["succeeded", "failed"]:
+                    cleaned.add(job_id)
+            self._running_jobs = cleaned
 
     def _execute_task(self, job: IngestJob):
-        """执行任务"""
-        try:
-            logger.info(f"开始执行任务: job_id={job.job_id}, task_type={job.task_type.value}")
+        """执行任务，包含重试与指数退避"""
+        attempt = 0
+        while True:
+            try:
+                logger.info(
+                    f"开始执行任务: job_id={job.job_id}, task_type={job.task_type.value}, attempt={attempt+1}"
+                )
 
-            if job.task_type == TaskType.NOTE:
-                self._execute_note_task(job)
-            elif job.task_type == TaskType.RAG:
-                self._execute_rag_task(job)
-            elif job.task_type == TaskType.WEB:
-                self._execute_web_task(job)
-            else:
-                raise ValueError(f"未知任务类型: {job.task_type}")
+                if job.task_type == TaskType.NOTE:
+                    self._execute_note_task(job)
+                elif job.task_type == TaskType.RAG:
+                    self._execute_rag_task(job)
+                elif job.task_type == TaskType.WEB:
+                    self._execute_web_task(job)
+                else:
+                    raise ValueError(f"未知任务类型: {job.task_type}")
 
-            job.status = "succeeded"
-            job.updated_at = datetime.utcnow()
-            logger.info(f"任务执行成功: job_id={job.job_id}")
+                job.status = "succeeded"
+                job.updated_at = datetime.utcnow()
+                logger.info(f"任务执行成功: job_id={job.job_id}")
+                return
 
-        except Exception as e:
-            logger.error(f"任务执行失败: job_id={job.job_id}, error={e!r}")
+            except Exception as e:  # noqa: BLE001
+                attempt += 1
+                job.retries_attempted = attempt
+                job.error_code = type(e).__name__
+                job.error_message = str(e)
+                job.updated_at = datetime.utcnow()
+                logger.error(
+                    f"任务执行失败: job_id={job.job_id}, attempt={attempt}, error={e!r}"
+                )
 
-            job.status = "failed"
-            job.error_code = type(e).__name__
-            job.error_message = str(e)
-            job.updated_at = datetime.utcnow()
+                if attempt <= MAX_RETRIES:
+                    backoff = min(2 ** (attempt - 1), 8)
+                    time.sleep(backoff)
+                    continue
+
+                job.status = "failed"
+                return
 
     def _execute_note_task(self, job: IngestJob):
         """执行笔记入库任务"""
@@ -236,8 +286,16 @@ class TaskManager:
         if not raw_text:
             raise ValueError("raw_text 不能为空")
 
-        # 调用现有的同步入库函数
-        result = entries_ingest({"raw_text": raw_text})
+        # 调用现有的同步入库函数，传递完整的payload
+        # 如果task_payload存在且包含input_content/answer_payload，优先使用
+        # 否则使用raw_text
+        if job.task_payload:
+            payload = job.task_payload
+        else:
+            payload = {"raw_text": raw_text}
+
+        # 2号通道使用远端API(DeePSeek)进行向量化，而非本地Ollama
+        result = entries_ingest(payload, use_remote_embedding=True)
         entries = result.get("entries", [])
         if not entries:
             raise RuntimeError("entries_ingest 返回空结果")
@@ -247,39 +305,16 @@ class TaskManager:
 
     def _execute_rag_task(self, job: IngestJob):
         """执行RAG查询任务"""
-        try:
-            # 通过HTTP API调用RAG服务
-            api_base = os.getenv("API_BASE", DEFAULT_API_BASE)
-
-            # 由于当前RAG服务不直接暴露HTTP接口，我们暂时直接调用内部函数
-            # TODO: 创建RAG服务的HTTP接口
-            payload = job.result or {}
-            result = qa_answer_rag(payload)
-            job.result = result
-        except Exception as e:
-            job.status = "failed"
-            job.error_code = type(e).__name__
-            job.error_message = str(e)
-            job.updated_at = datetime.utcnow()
-            return
+        # 目前直接调用内部函数；未来可切换为 HTTP 服务
+        payload = job.task_payload or {}
+        result = qa_answer_rag(payload)
+        job.result = result
 
     def _execute_web_task(self, job: IngestJob):
         """执行Web查询任务"""
-        try:
-            # 通过HTTP API调用Web服务
-            api_base = os.getenv("API_BASE", DEFAULT_API_BASE)
-
-            # 由于当前Web服务不直接暴露HTTP接口，我们暂时直接调用内部函数
-            # TODO: 创建Web服务的HTTP接口
-            payload = job.result or {}
-            result = qa_answer_web(payload)
-            job.result = result
-        except Exception as e:
-            job.status = "failed"
-            job.error_code = type(e).__name__
-            job.error_message = str(e)
-            job.updated_at = datetime.utcnow()
-            return
+        payload = job.task_payload or {}
+        result = qa_answer_web(payload)
+        job.result = result
 
     def get_job(self, job_id: str) -> Optional[IngestJob]:
         """获取任务"""

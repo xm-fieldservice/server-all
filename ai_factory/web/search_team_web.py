@@ -5,10 +5,11 @@ from __future__ import annotations
 当前实现：
 - 直接使用 Google Custom Search（与旧 search_team_backend 保持一致）；
 - 提供 web_search(query) 和 parallel_web_search_aggregate(sub_queries) 两个函数；
-- 仅负责“捞网页结果”，不涉及 LLM 或多 Agent 逻辑。
+- 仅负责"捞网页结果"，不涉及 LLM 或多 Agent 逻辑。
 
-返回结果格式与 ai_factory.web.evidence_adapter 的约定兼容：
-- 每条记录包含 url/title/snippet，可选附加 position/site/published_at 等字段。
+代理支持：
+- 通过环境变量 CLASH_HTTP_PROXY 和 CLASH_SOCKS_PROXY 配置
+- 默认为 HTTP:7890, SOCKS5:7891
 """
 
 import os
@@ -29,7 +30,21 @@ def _get_google_search_config() -> Dict[str, str]:
     return {"api_key": api_key, "cx": cx}
 
 
+def _get_proxy() -> Dict[str, str] | None:
+    """获取代理配置"""
+    http_proxy = os.environ.get("CLASH_HTTP_PROXY") or os.environ.get("HTTP_PROXY")
+    socks_proxy = os.environ.get("CLASH_SOCKS_PROXY") or os.environ.get("SOCKS_PROXY")
+    
+    if http_proxy:
+        return {"http": http_proxy, "https": http_proxy}
+    elif socks_proxy:
+        # SOCKS5需要转换为http
+        return {"http": f"socks5://{socks_proxy}", "https": f"socks5://{socks_proxy}"}
+    return None
+
+
 _GOOGLE_SEARCH_CFG = _get_google_search_config()
+_PROXY_CFG = _get_proxy()
 
 
 def web_search_once(query: str, num: int = 5, *, hl: str = "zh-cn", gl: str = "cn") -> List[Dict[str, Any]]:
@@ -56,11 +71,13 @@ def web_search_once(query: str, num: int = 5, *, hl: str = "zh-cn", gl: str = "c
 
     # 使用较短超时时间，并捕获所有请求异常，避免在网络受限环境下长时间卡死。
     try:
-        resp = requests.get(url, params=params, timeout=5)
+        resp = requests.get(url, params=params, timeout=10, proxies=_PROXY_CFG)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:  # noqa: BLE001
         print(f"[web_search_once] request failed for query={query!r}: {e!r}")
+        if _PROXY_CFG:
+            print(f"[web_search_once] 代理配置: {_PROXY_CFG}")
         return []
     items = data.get("items", []) or []
 

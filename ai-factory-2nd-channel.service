@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Factory 2nd Channel Service
+After=network.target
+
+[Service]
+Type=simple
+User=ecs-assist-user
+WorkingDirectory=/home/ecs-assist-user/ai-factory
+Environment="AI_PG_HOST=localhost"
+Environment="AI_PG_PORT=5433"
+Environment="AI_PG_DB=rag_db"
+Environment="AI_PG_USER=rag_user"
+Environment="AI_PG_PASSWORD=rag_password"
+ExecStart=/home/ecs-assist-user/ai-factory/start_2nd_channel.sh
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -20,6 +20,14 @@ from typing import Generator
 import psycopg2
 from psycopg2.extensions import connection as PgConnection
 
+# 导入pgvector适配器
+try:
+    from pgvector.psycopg2 import register_vector
+    _HAS_PGVECTOR = True
+except ImportError:
+    _HAS_PGVECTOR = False
+    print("[警告] pgvector未安装，向量将以字符串形式存储")
+
 
 def _get_dsn() -> str:
     host = os.getenv("AI_PG_HOST") or "localhost"
@@ -39,6 +47,11 @@ def get_connection() -> PgConnection:
 
     dsn = _get_dsn()
     conn = psycopg2.connect(dsn)
+    
+    # 注册pgvector适配器
+    if _HAS_PGVECTOR:
+        register_vector(conn)
+    
     # 设置会话时区，统一 NOW() 与 timestamptz 的显示/排序语义
     try:
         tz = os.getenv("AI_TZ", "Asia/Shanghai")

@@ -3,12 +3,13 @@ from __future__ import annotations
 """RAG 检索基础模块：基于 entry_embeddings 做向量检索。
 
 v0 目标：
-- 提供 embed_query(text) 调用本地 Ollama qwen3-embedding:4b；
+- 提供 embed_query(text) 调用 DashScope text-embedding-v4；
 - 提供 search_entries(query, ...) 在 Postgres + pgvector 上做语义检索；
 - 仅返回 citations（entries + score），answer 交给上层 Agent 决定。
 """
 
 import json
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -18,9 +19,10 @@ import requests
 from ai_factory.db.pgvector_client import connection_scope
 
 
-OLLAMA_URL = "http://localhost:11434/api/embeddings"
-EMBEDDING_MODEL = "qwen3-embedding:4b"
-EMBEDDING_DIM = 2560
+DASHSCOPE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
+DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+EMBEDDING_MODEL = "text-embedding-v4"
+EMBEDDING_DIM = 1024
 
 
 @dataclass
@@ -35,13 +37,21 @@ class RetrievedEntry:
     score: float  # 越小越相似（基于余弦距离）
 
 
-def _call_ollama_embedding(text: str) -> List[float]:
-    payload = {"model": EMBEDDING_MODEL, "prompt": text}
-    resp = requests.post(OLLAMA_URL, data=json.dumps(payload), timeout=60)
+def _call_dashscope_embedding(text: str) -> List[float]:
+    """调用DashScope API生成query embedding。"""
+    headers = {
+        "Authorization": f"Bearer {DASHSCOPE_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": EMBEDDING_MODEL,
+        "input": text
+    }
+    resp = requests.post(DASHSCOPE_URL, json=payload, headers=headers, timeout=60)
     resp.raise_for_status()
     data: Dict[str, Any] = resp.json()
-
-    emb = data.get("embedding")
+    
+    emb = data.get("data", [{}])[0].get("embedding")
     if not isinstance(emb, list):
         raise ValueError(f"Unexpected embedding response format: {data}")
     if len(emb) != EMBEDDING_DIM:
@@ -57,7 +67,7 @@ def embed_query(text: str) -> List[float]:
     cleaned = text.strip()
     if not cleaned:
         raise ValueError("query text is empty")
-    return _call_ollama_embedding(cleaned)
+    return _call_dashscope_embedding(cleaned)
 
 
 def search_entries(

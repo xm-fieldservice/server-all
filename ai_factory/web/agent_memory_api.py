@@ -30,6 +30,7 @@ from ai_factory.agents.memory import (
     get_llm_client
 )
 from ai_factory.db.pgvector_client import connection_scope
+from ai_factory.web.access_api import router as access_router
 
 # 初始化日志
 logger = get_logger("agent_memory_api")
@@ -49,6 +50,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 挂载 2号通道（接入层）三合一路由
+app.include_router(access_router)
 
 # 初始化记忆服务（仅 entries + 向量检索，不再依赖 chat* 表）
 entry_service = None

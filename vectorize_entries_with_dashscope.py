@@ -41,10 +41,10 @@ from ai_factory.db.pgvector_client import connection_scope
 # DashScope API 配置
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 DASHSCOPE_BASE_URL = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v3")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL_NAME", "text-embedding-v4")
 
-# 向量维度
-EMBEDDING_DIM = 1536
+# 向量维度 (text-embedding-v4默认为1024维)
+EMBEDDING_DIM = 1024
 
 # 批处理配置
 DEFAULT_BATCH_SIZE = 50
@@ -59,10 +59,10 @@ def generate_embedding(text: str) -> List[float]:
 
     Args:
         text: 输入文本
-
+ 
     Returns:
-        List[float]: 1536维向量
-
+        List[float]: 2560维向量
+ 
     Raises:
         Exception: API调用失败
     """
@@ -78,8 +78,13 @@ def generate_embedding(text: str) -> List[float]:
     data = {
         "model": EMBEDDING_MODEL,
         "input": text,
-        "encoding_format": "float"
+        "encoding_format": "float",
+        "parameters": {
+            "text_type": "document"
+        }
     }
+    # 尝试通过parameters控制维度
+    # 如果API仍返回非2560维，需要修改表结构或更换模型
 
     response = HTTP_CLIENT.post(url, json=data, headers=headers)
     response.raise_for_status()

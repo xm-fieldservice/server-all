@@ -28,6 +28,9 @@ from ai_factory.vectorize_entries_with_ollama import (
     call_ollama_embedding,
     upsert_entry_embedding,
 )
+from ai_factory.vectorize_entries_with_dashscope import (
+    generate_embedding as _call_dashscope_embedding,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -265,11 +268,22 @@ def _append_failed_entry_to_md(raw_text: str, payload: Dict[str, Any], error: Ba
         print(f"[entries_ingest] 写入失败文档时出错: {file_err!r}")
 
 
-def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
+def entries_ingest(payload: Dict[str, Any], *, use_remote_embedding: bool = False) -> Dict[str, Any]:
     """高层入口：处理原始输入并写入 entries.
+    
+    Args:
+        payload: 任务参数
+        use_remote_embedding: 是否使用远端API(DeePSeek)进行向量化，默认为False使用本地Ollama
+                             2号通道(异步任务)应设置为True以使用云端向量化服务
+
+    支持两种场景：
+    1. 笔记入库：input_content = 笔记原文，answer_payload = null
+    2. 问答场景（RAG/Web）：input_content = 用户提问，answer_payload = LLM答案（Markdown）
 
     期望 payload 结构（v0 草案）：
-    - raw_text: str
+    - raw_text: str（笔记场景必填，问答场景为null）
+    - input_content: str（问答场景必填，笔记场景可选，默认使用raw_text）
+    - answer_payload: str（问答场景必填，笔记场景为null）
     - project_code: Optional[str]
     - user_id: Optional[str]
     - note_datetime: Optional[str]
@@ -279,8 +293,30 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
 
     raw_text = str(payload.get("raw_text", "")).strip()
-    if not raw_text:
-        raise ValueError("payload.raw_text 不能为空")
+    input_content = str(payload.get("input_content", "")).strip()
+    answer_payload_raw = payload.get("answer_payload")  # 可能是str或None
+
+    # 确定场景和最终使用的输入内容
+    # 笔记场景：raw_text有实际内容，answer_payload为None
+    # 问答场景：input_content有实际内容，answer_payload有实际内容，raw_text为空
+    is_note_scenario = bool(raw_text) and (answer_payload_raw is None)
+    is_qa_scenario = bool(input_content) and (answer_payload_raw is not None)
+
+    answer_payload = answer_payload_raw  # 用于entry字段
+
+    # 确定最终使用的输入内容
+    if is_note_scenario:
+        # 笔记场景：使用raw_text
+        final_content = raw_text
+    elif is_qa_scenario:
+        # 问答场景：使用input_content
+        final_content = input_content
+    else:
+        # 没有指定场景，尝试用raw_text
+        final_content = raw_text if raw_text else input_content
+
+    if not final_content:
+        raise ValueError("payload.raw_text 或 payload.input_content 不能为空")
 
     text_len = len(raw_text)
 
@@ -288,6 +324,10 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 1) ≤60 字：完全不用 LLM，title = 原文，summary = 原文；
     # 2) 60~600 字：summary 仍用原文，但通过 LLM 只生成一个不超过 ~60 字且不虚构的新标题；
     # 3) >600 字：保持原有长文本提示词逻辑（title+summary 由 LLM 生成）。
+
+    # 确定场景：笔记还是问答
+    is_note_scenario = bool(raw_text) and not bool(answer_payload)
+
     if text_len <= 60:
         base_meta: Dict[str, Any] = {}
         for key in ("project_code", "user_id", "note_datetime"):
@@ -299,15 +339,16 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             base_meta.update(extra_ctx)
 
         entry_id = f"ent_{uuid4().hex[:8]}"
-        title = raw_text
-        summary = raw_text
+        title = final_content
+        summary = final_content
         created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
-            "input_content": raw_text,
+            "input_content": final_content,
+            "answer_payload": None if is_note_scenario else answer_payload,
             "created_at": created_at,
         }
 
@@ -333,7 +374,9 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             emb_text = _build_embedding_text(entry)
-            embedding = call_ollama_embedding(emb_text)
+            # 使用DashScope API向量化（1024维）
+            embedding = _call_dashscope_embedding(emb_text)
+            print(f"[entries_ingest] 使用DashScope向量化完成 (1024维)")
             entry_for_embedding = dict(entry)
             entry_for_embedding.setdefault("mode", "NOTE")
             upsert_entry_embedding(entry_for_embedding, embedding)
@@ -380,7 +423,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 工作记录原文如下：
 ----------------
-{raw_text}
+{final_content}
 ----------------
 """
 
@@ -436,29 +479,31 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             title = str(obj.get("title") or "").strip()
             if not title:
                 # 即便 JSON 解析成功，但未提供有效 title 时，也回退到截断原文
-                title = raw_text[:60]
+                title = final_content[:60]
+            summary = final_content
         except Exception as e:
-            # 不再因为 LLM JSON 解析失败而中断整条写库，改为回退到安全标题
+            # 不再因为 LLM JSON 解析失败而中断整条写库，改为回退到安全标题+原文摘要
             print(
-                f"[entries_ingest] LLM 标题 JSON 解析失败, 回退到截断标题: {e}; "
-                f"raw_output={text[:200]!r}"
+                f"[entries_ingest] LLM 标题 JSON 解析失败, 回退到原文: {e}; "
+                f"raw_output={final_content[:200]!r}"
             )
-            title = raw_text[:60]
+            title = final_content[:60]
+            summary = final_content
 
         entry_id = f"ent_{uuid4().hex[:8]}"
-        summary = raw_text
         created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
             "entry_id": entry_id,
             "title": title,
             "summary_ai": summary,
-            "input_content": raw_text,
+            "input_content": final_content,
+            "answer_payload": None if is_note_scenario else answer_payload,
             "created_at": created_at,
         }
 
         # 优先从 payload.extra_context.tags_snapshot 构造 scene_tags, 退回到从正文解析
-        scene_tags = _build_scene_tags_from_payload(payload, raw_text)
+        scene_tags = _build_scene_tags_from_payload(payload, final_content)
         scene_tags = _apply_channel_specific_scene_tags(scene_tags, payload)
         if scene_tags:
             entry["scene_tags"] = scene_tags
@@ -479,12 +524,14 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             emb_text = _build_embedding_text(entry)
-            embedding = call_ollama_embedding(emb_text)
+            # 使用DashScope API向量化（1024维）
+            embedding = _call_dashscope_embedding(emb_text)
+            print(f"[entries_ingest] 使用DashScope向量化完成 (1024维)")
             entry_for_embedding = dict(entry)
             entry_for_embedding.setdefault("mode", "NOTE")
             upsert_entry_embedding(entry_for_embedding, embedding)
         except Exception as exc:  # noqa: BLE001
-            print(f"[entries_ingest] : {exc!r}")
+            print(f"[entries_ingest] 同步向量化失败: {exc!r}")
 
         chunk = ChunkResult(entry_id=entry_id, title=title, content=raw_text)
         result = EntryIngestionResult(entries=[chunk])
@@ -583,20 +630,20 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             title = str(obj.get("title") or "").strip()
             summary = str(obj.get("summary") or "").strip()
             if not title:
-                title = raw_text[:60]
+                title = final_content[:60]
             if not summary:
-                summary = raw_text
+                summary = final_content
         except Exception as e:
             # 避免因 LLM JSON 解析失败导致整条写库中断，回退到保守标题+原文摘要
             print(
                 f"[entries_ingest] LLM 长文本 JSON 解析失败, 回退到原文: {e}; "
-                f"raw_output={text[:200]!r}"
+                f"raw_output={final_content[:200]!r}"
             )
-            title = raw_text[:60]
-            summary = raw_text
+            title = final_content[:60]
+            summary = final_content
 
         entry_id = f"ent_{uuid4().hex[:8]}"
-        content = raw_text
+        content = final_content  # 长文本场景使用final_content
         created_at = datetime.utcnow().isoformat()
 
         entry: Dict[str, Any] = {
@@ -604,6 +651,7 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
             "title": title,
             "summary_ai": summary,
             "input_content": content,
+            "answer_payload": None if is_note_scenario else answer_payload,
             "created_at": created_at,
         }
 
@@ -629,7 +677,9 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
 
         try:
             emb_text = _build_embedding_text(entry)
-            embedding = call_ollama_embedding(emb_text)
+            # 使用DashScope API向量化（1024维）
+            embedding = _call_dashscope_embedding(emb_text)
+            print(f"[entries_ingest] 使用DashScope向量化完成 (1024维)")
             # 标记 mode，便于后续分析（例如区分 NOTE / 其他来源）。
             entry_for_embedding = dict(entry)
             entry_for_embedding.setdefault("mode", "NOTE")

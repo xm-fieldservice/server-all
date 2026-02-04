@@ -25,13 +25,24 @@ def insert_entry(entry: Dict[str, Any]) -> str:
     这里不做复杂校验，只负责写库。
     """
 
+    # 确保 created_at 使用当前时间（如果未传递）
+    if 'created_at' not in entry:
+        entry = dict(entry)  # 创建副本
+        entry['created_at'] = datetime.utcnow()
+    elif entry['created_at'] is None:
+        entry = dict(entry)  # 创建副本
+        entry['created_at'] = datetime.utcnow()
+
     columns = list(entry.keys())
     values: List[Any] = []
     for c in columns:
         v = entry[c]
         # 对字典类型(如 scene_tags 等 JSON 字段)使用 Json 包装,
-        # 以便 psycopg2 正确适配到 json/jsonb/text 列
+        # 同时也处理 jsonb 类型的字段(如 answer_payload)
         if isinstance(v, dict):
+            values.append(Json(v))
+        # 对于 jsonb 类型，如果不是字典，也使用 Json 包装
+        elif c in ("answer_payload", "scene_tags"):
             values.append(Json(v))
         else:
             values.append(v)
@@ -88,7 +99,8 @@ def get_entry(entry_id: str) -> Optional[Dict[str, Any]]:
             row = cur.fetchone()
             if row is None:
                 return None
-            colnames = [d[0] for d in cur.description]
+            description = cur.description if cur.description else []
+            colnames = [d[0] for d in description]
 
     return dict(zip(colnames, row))
 
@@ -106,7 +118,8 @@ def list_entries_by_time(limit: int = 100) -> List[Dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(sql, (limit,))
             rows = cur.fetchall()
-            colnames = [d[0] for d in cur.description]
+            description = cur.description if cur.description else []
+            colnames = [d[0] for d in description]
             for r in rows:
                 results.append(dict(zip(colnames, r)))
 
