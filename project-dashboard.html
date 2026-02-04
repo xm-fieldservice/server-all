@@ -1144,7 +1144,11 @@
             // 销毁旧图表
             if (viewConfigs[index].chart) {
                 console.log('[Init] Destroying old chart');
-                viewConfigs[index].chart.destroy();
+                if (typeof viewConfigs[index].chart.destroy === 'function') {
+                    viewConfigs[index].chart.destroy();
+                } else {
+                    viewConfigs[index].chart = null;
+                }
             }
             
             let chart;
@@ -2511,7 +2515,13 @@
                 filterNotes(e.target.value, index);
             });
 
-            return { type: 'notes', container: container };
+            return { 
+                type: 'notes', 
+                container: container,
+                destroy: function() {
+                    container.innerHTML = '';
+                }
+            };
         }
 
         function generateNotesCards() {
