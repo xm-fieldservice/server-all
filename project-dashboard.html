@@ -1562,20 +1562,26 @@
                 modes: { default: ['drag-canvas', 'zoom-canvas'] }
             });
 
-            const flowNodes = [
-                { id: 'strategy', label: '战略制定', x: 80, y: height / 2 },
-                { id: 'goal', label: '目标分解', x: 200, y: height / 2 },
-                { id: 'planning', label: '规划编制', x: 320, y: height / 2 },
-                { id: 'execution', label: '项目执行', x: 440, y: height / 2 },
-                { id: 'result', label: '业务成果', x: 560, y: height / 2 }
-            ];
+            // 使用 projectData.nodes 中的实际节点
+            const flowNodes = projectData.nodes
+                .filter(n => ['root', 'level1', 'module'].includes(n.type))
+                .slice(0, 5)
+                .map((n, i) => ({
+                    id: n.id,
+                    label: n.label,
+                    x: 80 + i * 150,
+                    y: height / 2
+                }));
 
-            const edges = [
-                { source: 'strategy', target: 'goal' },
-                { source: 'goal', target: 'planning' },
-                { source: 'planning', target: 'execution' },
-                { source: 'execution', target: 'result' }
-            ];
+            console.log('[Flow] Flow nodes:', flowNodes.length);
+
+            // 构建边
+            const edges = [];
+            flowNodes.forEach((node, i) => {
+                if (i < flowNodes.length - 1) {
+                    edges.push({ source: node.id, target: flowNodes[i + 1].id });
+                }
+            });
 
             graph.data({ nodes: flowNodes, edges });
             graph.render();
@@ -1596,16 +1602,24 @@
                 }
             });
 
+            // 从 nodes 中提取关系
             const nodes = projectData.nodes.slice(0, 10).map(n => ({
                 id: n.id,
                 label: n.label,
                 size: n.children?.length > 0 ? 60 : 40
             }));
 
-            graph.data({
-                nodes,
-                edges: projectData.relations
+            // 从 parentId 和 children 构建边
+            const edges = [];
+            projectData.nodes.forEach(n => {
+                if (n.parentId && n.parentId !== 'root') {
+                    edges.push({ source: n.parentId, target: n.id });
+                }
             });
+
+            console.log('[Relation] Nodes:', nodes.length, 'Edges:', edges.length);
+
+            graph.data({ nodes, edges });
             graph.render();
 
             return graph;
