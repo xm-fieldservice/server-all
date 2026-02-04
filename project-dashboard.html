@@ -1530,28 +1530,108 @@
         let frameSelectedEdge = null;
         let frameEdgeMode = false;
         let frameEdgeSource = null;
+        let frameCurrentIndex = 0;
 
         function createFrameChart(width, height, index) {
+            frameCurrentIndex = index;
             const containerId = `chart-${index}`;
             const container = document.getElementById(containerId);
 
             // 清空容器并添加完整UI
             container.innerHTML = `
                 <div class="frame-toolbar">
-                    <span class="frame-title">📐 框图模式</span>
+                    <span class="frame-title">📐 框图/流程图</span>
                     <div class="frame-toolbar-actions">
+                        <button class="frame-btn frame-btn-success" onclick="toggleFrameAiPanel()">🤖 AI生成</button>
                         <button class="frame-btn" onclick="toggleFrameEdgeMode(${index})">🔗 连线</button>
                         <button class="frame-btn" onclick="fitFrameView(${index})">🔍 适应</button>
                         <button class="frame-btn" onclick="exportFrameData(${index})">📋 导出</button>
+                        <button class="frame-btn frame-btn-danger" onclick="clearFrameGraph(${index})">🗑️ 清空</button>
                     </div>
                 </div>
+
+                <!-- 左侧节点面板 -->
+                <div class="frame-node-panel" id="frame-node-panel-${index}">
+                    <h4>📦 拖拽添加节点</h4>
+                    <div class="draggable-node" draggable="true" ondragstart="frameDragStart(event, 'rect', ${index})">
+                        <span>⬜</span> 矩形
+                    </div>
+                    <div class="draggable-node" draggable="true" ondragstart="frameDragStart(event, 'circle', ${index})">
+                        <span>⭕</span> 圆形
+                    </div>
+                    <div class="draggable-node" draggable="true" ondragstart="frameDragStart(event, 'diamond', ${index})">
+                        <span>◆</span> 菱形
+                    </div>
+                    <div class="draggable-node" draggable="true" ondragstart="frameDragStart(event, 'ellipse', ${index})">
+                        <span>⬭</span> 椭圆
+                    </div>
+
+                    <div class="frame-quick-styles">
+                        <h4>🎨 快速样式</h4>
+                        <div class="quick-style-btns">
+                            <button class="frame-btn" onclick="applyFrameStyle(${index}, 'start')">🟢 开始</button>
+                            <button class="frame-btn" onclick="applyFrameStyle(${index}, 'process')">🔵 处理</button>
+                            <button class="frame-btn" onclick="applyFrameStyle(${index}, 'decision')">🟡 判断</button>
+                            <button class="frame-btn" onclick="applyFrameStyle(${index}, 'end')">🔴 结束</button>
+                            <button class="frame-btn" onclick="applyFrameStyle(${index}, 'data')">🟣 数据</button>
+                        </div>
+                        <p class="hint">选中节点后点击应用</p>
+                    </div>
+                </div>
+
+                <!-- AI生成面板 -->
+                <div class="frame-ai-panel" id="frame-ai-panel-${index}">
+                    <h4>🤖 输入流程描述，AI自动生成</h4>
+                    <textarea id="frame-ai-prompt-${index}" placeholder="例如：请假审批流程、用户登录流程..."></textarea>
+                    <button class="frame-btn frame-btn-success" onclick="generateFrameWithAI(${index})">✨ 生成</button>
+                </div>
+
+                <!-- 属性面板 -->
+                <div class="frame-properties-panel" id="frame-properties-panel-${index}">
+                    <h4 id="frame-panel-title-${index}>📝 属性</h4>
+                    <div id="frame-node-props-${index}">
+                        <div class="prop-group"><label>节点ID</label><input type="text" id="frame-node-id-${index}" disabled></div>
+                        <div class="prop-group"><label>标签</label><input type="text" id="frame-node-label-${index}" onchange="updateFrameNode(${index})"></div>
+                        <div class="prop-group"><label>形状</label>
+                            <select id="frame-node-shape-${index}" onchange="updateFrameNode(${index})">
+                                <option value="rect">矩形</option>
+                                <option value="circle">圆形</option>
+                                <option value="diamond">菱形</option>
+                                <option value="ellipse">椭圆</option>
+                            </select>
+                        </div>
+                        <div class="prop-group"><label>背景颜色</label><input type="color" id="frame-node-fill-${index}" onchange="updateFrameNode(${index})"></div>
+                        <div class="prop-group"><label>边框颜色</label><input type="color" id="frame-node-stroke-${index}" onchange="updateFrameNode(${index})"></div>
+                    </div>
+                    <div id="frame-edge-props-${index}" style="display:none;">
+                        <div class="prop-group"><label>源节点</label><input type="text" id="frame-edge-source-${index}" disabled></div>
+                        <div class="prop-group"><label>目标节点</label><input type="text" id="frame-edge-target-${index}" disabled></div>
+                        <div class="prop-group"><label>标签</label><input type="text" id="frame-edge-label-${index}" onchange="updateFrameEdge(${index})"></div>
+                        <div class="prop-group"><label>线条颜色</label><input type="color" id="frame-edge-stroke-${index}" onchange="updateFrameEdge(${index})"></div>
+                    </div>
+                    <button class="frame-btn frame-btn-danger" onclick="deleteFrameSelected(${index})" style="width:100%;margin-top:8px;">删除</button>
+                </div>
+
+                <!-- 画布 -->
                 <div class="frame-content">
                     <div class="frame-canvas" id="frame-canvas-${index}"></div>
                 </div>
+
+                <!-- 右键菜单 -->
+                <div class="frame-context-menu" id="frame-context-menu-${index}">
+                    <div onclick="frameAddNodeAtCursor(${index}, 'rect')">⬜ 添加矩形</div>
+                    <div onclick="frameAddNodeAtCursor(${index}, 'circle')">⭕ 添加圆形</div>
+                    <div onclick="frameAddNodeAtCursor(${index}, 'diamond')">◆ 添加菱形</div>
+                    <div onclick="frameAddNodeAtCursor(${index}, 'ellipse')">⬭ 添加椭圆</div>
+                </div>
+
+                <!-- 提示 -->
                 <div class="frame-tooltip" id="frame-tooltip-${index}"></div>
             `;
 
             const canvasEl = document.getElementById(`frame-canvas-${index}`);
+            const nodePanel = document.getElementById(`frame-node-panel-${index}`);
+            const propPanel = document.getElementById(`frame-properties-panel-${index}`);
 
             // 注册自定义节点
             if (!G6.registerNode['frame-node']) {
@@ -1626,8 +1706,8 @@
 
             const graph = new G6.Graph({
                 container: canvasEl,
-                width: width,
-                height: height - 40,
+                width: width - nodePanel.offsetWidth - propPanel.offsetWidth - 20,
+                height: height - 50,
                 modes: {
                     default: ['drag-canvas', 'zoom-canvas', 'drag-node', 'click-select']
                 },
@@ -1652,8 +1732,8 @@
                 .map((n, i) => ({
                     id: n.id,
                     label: n.label,
-                    x: 100 + (i % 3) * 200,
-                    y: 80 + Math.floor(i / 3) * 120,
+                    x: 200 + (i % 3) * 220,
+                    y: 100 + Math.floor(i / 3) * 140,
                     shapeType: 'rect',
                     style: {
                         fill: n.status === 'completed' ? '#d4edda' : (n.status === 'active' ? '#fff3cd' : '#f8f9fa'),
@@ -1669,22 +1749,28 @@
             graph.data({ nodes, edges });
             graph.render();
 
+            // 拖拽放置
+            const contentDiv = document.querySelector(`#${containerId} .frame-content`);
+            contentDiv.addEventListener('dragover', (e) => e.preventDefault());
+            contentDiv.addEventListener('drop', (e) => frameDropNode(e, index));
+
             // 节点点击事件
             graph.on('node:click', (evt) => {
                 const node = evt.item;
+                const model = node.getModel();
 
                 if (frameEdgeMode) {
                     // 连线模式
                     if (!frameEdgeSource) {
                         frameEdgeSource = node;
                         node.setState('edge-source', true);
-                        showFrameTooltip(index, '已选择起点，点击终点节点');
+                        showFrameTooltip(index, '已选择起点，请点击终点节点');
                     } else {
                         const sourceId = frameEdgeSource.getModel().id;
-                        const targetId = node.getModel().id;
+                        const targetId = model.id;
 
                         if (sourceId === targetId) {
-                            showFrameTooltip(index, '不能连接同一个节点');
+                            showFrameTooltip(index, '不能连接同一个节点！');
                         } else {
                             const exists = graph.getEdges().some(e => {
                                 const m = e.getModel();
@@ -1692,21 +1778,20 @@
                             });
 
                             if (exists) {
-                                showFrameTooltip(index, '连线已存在');
+                                showFrameTooltip(index, '连线已存在！');
                             } else {
                                 graph.addItem('edge', {
                                     source: sourceId,
                                     target: targetId
                                 });
-                                showFrameTooltip(index, '连线创建成功');
+                                showFrameTooltip(index, '连线创建成功！');
                             }
                         }
-
                         frameEdgeSource.setState('edge-source', false);
                         frameEdgeSource = null;
                     }
                 } else {
-                    // 选中节点
+                    // 选中节点，显示属性
                     if (frameSelectedNode) {
                         frameSelectedNode.clearStates('selected');
                     }
@@ -1716,18 +1801,87 @@
                     }
                     frameSelectedNode = node;
                     frameSelectedNode.setState('selected', true);
+                    showFrameNodeProps(index, node);
                 }
             });
 
-            // 画布点击事件
+            // 边点击事件
+            graph.on('edge:click', (evt) => {
+                if (frameEdgeMode) return;
+                const edge = evt.item;
+                const model = edge.getModel();
+
+                if (frameSelectedNode) {
+                    frameSelectedNode.clearStates('selected');
+                    frameSelectedNode = null;
+                }
+                if (frameSelectedEdge) {
+                    frameSelectedEdge.clearStates('selected');
+                }
+                frameSelectedEdge = edge;
+                frameSelectedEdge.setState('selected', true);
+                showFrameEdgeProps(index, edge);
+            });
+
+            // 双击编辑
+            graph.on('node:dblclick', (evt) => {
+                const model = evt.item.getModel();
+                const newLabel = prompt('编辑节点标签:', model.label);
+                if (newLabel !== null) {
+                    graph.updateItem(evt.item, { label: newLabel });
+                    showFrameTooltip(index, '标签已更新');
+                }
+            });
+
+            graph.on('edge:dblclick', (evt) => {
+                const model = evt.item.getModel();
+                const newLabel = prompt('编辑连线注释:', model.label || '');
+                if (newLabel !== null) {
+                    graph.updateItem(evt.item, { label: newLabel });
+                    showFrameTooltip(index, '注释已更新');
+                }
+            });
+
+            // 画布点击
             graph.on('canvas:click', () => {
                 if (frameEdgeMode && frameEdgeSource) {
                     frameEdgeSource.setState('edge-source', false);
                     frameEdgeSource = null;
+                    showFrameTooltip(index, '已取消连线');
                 }
                 if (frameSelectedNode) {
                     frameSelectedNode.clearStates('selected');
                     frameSelectedNode = null;
+                }
+                if (frameSelectedEdge) {
+                    frameSelectedEdge.clearStates('selected');
+                    frameSelectedEdge = null;
+                }
+                hideFrameProps(index);
+            });
+
+            // 右键菜单
+            graph.on('canvas:contextmenu', (evt) => {
+                evt.preventDefault();
+                const point = graph.getPointByClient(evt.clientX, evt.clientY);
+                const menu = document.getElementById(`frame-context-menu-${index}`);
+                menu.style.left = evt.clientX + 'px';
+                menu.style.top = evt.clientY + 'px';
+                menu.style.display = 'block';
+                menu.dataset.x = point.x;
+                menu.dataset.y = point.y;
+            });
+
+            document.addEventListener('click', (e) => {
+                if (!e.target.closest(`#frame-context-menu-${index}`)) {
+                    document.getElementById(`frame-context-menu-${index}`).style.display = 'none';
+                }
+            });
+
+            // 键盘删除
+            document.addEventListener('keydown', (e) => {
+                if ((e.key === 'Delete' || e.key === 'Backspace') && !frameEdgeMode) {
+                    deleteFrameSelected(index);
                 }
             });
 
@@ -1741,10 +1895,237 @@
                 },
                 fitCenter: function() {
                     graph.fitCenter();
-                }
+                },
+                graph: graph
             };
         }
 
+        // 拖拽添加
+        function frameDragStart(e, shape, index) {
+            e.dataTransfer.setData('shape', shape);
+            e.dataTransfer.setData('index', index);
+        }
+
+        function frameDropNode(e, index) {
+            e.preventDefault();
+            const shape = e.dataTransfer.getData('shape');
+            const graph = frameGraphs[index];
+            if (!graph) return;
+
+            const canvasRect = document.getElementById(`frame-canvas-${index}`).getBoundingClientRect();
+            const x = e.clientX - canvasRect.left;
+            const y = e.clientY - canvasRect.top;
+            const point = graph.getPointByClient(x + canvasRect.left, y + canvasRect.top);
+
+            const id = 'node_' + Date.now();
+            graph.addItem('node', {
+                id,
+                x: point.x,
+                y: point.y,
+                label: '新节点',
+                shapeType: shape,
+                style: { fill: '#e8f4f8', stroke: '#1890ff' }
+            });
+            showFrameTooltip(index, '已添加 ' + shape + ' 节点');
+        }
+
+        function frameAddNodeAtCursor(index, shape) {
+            const graph = frameGraphs[index];
+            if (!graph) return;
+
+            const menu = document.getElementById(`frame-context-menu-${index}`);
+            const x = parseFloat(menu.dataset.x);
+            const y = parseFloat(menu.dataset.y);
+
+            const id = 'node_' + Date.now();
+            graph.addItem('node', {
+                id,
+                x,
+                y,
+                label: '新节点',
+                shapeType: shape,
+                style: { fill: '#e8f4f8', stroke: '#1890ff' }
+            });
+            menu.style.display = 'none';
+        }
+
+        // 属性面板
+        function showFrameNodeProps(index, node) {
+            const graph = frameGraphs[index];
+            const model = node.getModel();
+            const style = model.style || {};
+            const size = model.size || [120, 50];
+
+            document.getElementById(`frame-properties-panel-${index}`).style.display = 'block';
+            document.getElementById(`frame-node-props-${index}`).style.display = 'block';
+            document.getElementById(`frame-edge-props-${index}`).style.display = 'none';
+            document.getElementById(`frame-panel-title-${index}`).textContent = '📝 节点属性';
+
+            document.getElementById(`frame-node-id-${index}`).value = model.id;
+            document.getElementById(`frame-node-label-${index}`).value = model.label || '';
+            document.getElementById(`frame-node-shape-${index}`).value = model.shapeType || 'rect';
+            document.getElementById(`frame-node-fill-${index}`).value = style.fill || '#e8f4f8';
+            document.getElementById(`frame-node-stroke-${index}`).value = style.stroke || '#1890ff';
+        }
+
+        function showFrameEdgeProps(index, edge) {
+            const model = edge.getModel();
+            const style = model.style || {};
+
+            document.getElementById(`frame-properties-panel-${index}`).style.display = 'block';
+            document.getElementById(`frame-node-props-${index}`).style.display = 'none';
+            document.getElementById(`frame-edge-props-${index}`).style.display = 'block';
+            document.getElementById(`frame-panel-title-${index}`).textContent = '🔗 连线属性';
+
+            document.getElementById(`frame-edge-source-${index}`).value = model.source;
+            document.getElementById(`frame-edge-target-${index}`).value = model.target;
+            document.getElementById(`frame-edge-label-${index}`).value = model.label || '';
+            document.getElementById(`frame-edge-stroke-${index}`).value = style.stroke || '#666';
+        }
+
+        function hideFrameProps(index) {
+            document.getElementById(`frame-properties-panel-${index}`).style.display = 'none';
+        }
+
+        function updateFrameNode(index) {
+            const graph = frameGraphs[index];
+            if (!frameSelectedNode || !graph) return;
+
+            graph.updateItem(frameSelectedNode, {
+                label: document.getElementById(`frame-node-label-${index}`).value,
+                shapeType: document.getElementById(`frame-node-shape-${index}`).value,
+                style: {
+                    fill: document.getElementById(`frame-node-fill-${index}`).value,
+                    stroke: document.getElementById(`frame-node-stroke-${index}`).value
+                }
+            });
+        }
+
+        function updateFrameEdge(index) {
+            const graph = frameGraphs[index];
+            if (!frameSelectedEdge || !graph) return;
+
+            graph.updateItem(frameSelectedEdge, {
+                label: document.getElementById(`frame-edge-label-${index}`).value,
+                style: {
+                    stroke: document.getElementById(`frame-edge-stroke-${index}`).value
+                }
+            });
+        }
+
+        function applyFrameStyle(index, styleType) {
+            const graph = frameGraphs[index];
+            if (!frameSelectedNode || !graph) {
+                showFrameTooltip(index, '请先选中一个节点');
+                return;
+            }
+
+            const styles = {
+                start: { fill: '#d4edda', stroke: '#28a745', shape: 'ellipse', label: '开始' },
+                process: { fill: '#cce5ff', stroke: '#007bff', shape: 'rect', label: '处理' },
+                decision: { fill: '#fff3cd', stroke: '#ffc107', shape: 'diamond', label: '判断' },
+                end: { fill: '#f8d7da', stroke: '#dc3545', shape: 'circle', label: '结束' },
+                data: { fill: '#e2d4f0', stroke: '#6f42c1', shape: 'rect', label: '数据' }
+            };
+
+            const s = styles[styleType];
+            if (s) {
+                graph.updateItem(frameSelectedNode, {
+                    label: s.label,
+                    shapeType: s.shape,
+                    style: { fill: s.fill, stroke: s.stroke, lineWidth: 2 }
+                });
+                showFrameTooltip(index, `已应用${s.label}样式`);
+            }
+        }
+
+        function deleteFrameSelected(index) {
+            const graph = frameGraphs[index];
+            if (!graph) return;
+
+            if (frameSelectedNode) {
+                graph.removeItem(frameSelectedNode);
+                frameSelectedNode = null;
+                hideFrameProps(index);
+                showFrameTooltip(index, '节点已删除');
+            } else if (frameSelectedEdge) {
+                graph.removeItem(frameSelectedEdge);
+                frameSelectedEdge = null;
+                hideFrameProps(index);
+                showFrameTooltip(index, '连线已删除');
+            }
+        }
+
+        // AI生成
+        function toggleFrameAiPanel() {
+            document.getElementById(`frame-ai-panel-${frameCurrentIndex}`).classList.toggle('active');
+        }
+
+        function generateFrameWithAI(index) {
+            const prompt = document.getElementById(`frame-ai-prompt-${index}`).value.trim();
+            if (!prompt) { alert('请输入流程描述'); return; }
+
+            const graph = frameGraphs[index];
+            if (!graph) return;
+
+            let data;
+            if (prompt.includes('请假')) {
+                data = {
+                    nodes: [
+                        { id: '1', label: '提交申请', shapeType: 'ellipse', style: { fill: '#fff7e6', stroke: '#ffa940' } },
+                        { id: '2', label: '请假>3天?', shapeType: 'diamond', style: { fill: '#f6ffed', stroke: '#73d13d' } },
+                        { id: '3', label: '部门经理审批', shapeType: 'rect', style: { fill: '#e6f7ff', stroke: '#40a9ff' } },
+                        { id: '4', label: '直接主管审批', shapeType: 'rect', style: { fill: '#e6f7ff', stroke: '#40a9ff' } },
+                        { id: '5', label: '审批通过?', shapeType: 'diamond', style: { fill: '#f6ffed', stroke: '#73d13d' } },
+                        { id: '6', label: 'HR备案', shapeType: 'rect', style: { fill: '#f9f0ff', stroke: '#b37feb' } },
+                        { id: '7', label: '完成', shapeType: 'circle', style: { fill: '#fff1f0', stroke: '#ff7875' } }
+                    ],
+                    edges: [
+                        { source: '1', target: '2' },
+                        { source: '2', target: '3', label: '>3天' },
+                        { source: '2', target: '4', label: '≤3天' },
+                        { source: '3', target: '5' }, { source: '4', target: '5' },
+                        { source: '5', target: '6', label: '通过' },
+                        { source: '5', target: '1', label: '驳回' },
+                        { source: '6', target: '7' }
+                    ]
+                };
+            } else if (prompt.includes('登录')) {
+                data = {
+                    nodes: [
+                        { id: '1', label: '用户访问', shapeType: 'ellipse', style: { fill: '#fff7e6', stroke: '#ffa940' } },
+                        { id: '2', label: '已登录?', shapeType: 'diamond', style: { fill: '#f6ffed', stroke: '#73d13d' } },
+                        { id: '3', label: '显示登录页', shapeType: 'rect', style: { fill: '#e6f7ff', stroke: '#40a9ff' } },
+                        { id: '4', label: '验证凭据', shapeType: 'rect', style: { fill: '#f9f0ff', stroke: '#b37feb' } },
+                        { id: '5', label: '跳转首页', shapeType: 'circle', style: { fill: '#fff1f0', stroke: '#ff7875' } }
+                    ],
+                    edges: [
+                        { source: '1', target: '2' },
+                        { source: '2', target: '3', label: '否' },
+                        { source: '2', target: '5', label: '是' },
+                        { source: '3', target: '4' },
+                        { source: '4', target: '5' }
+                    ]
+                };
+            } else {
+                data = {
+                    nodes: [
+                        { id: '1', label: '开始', shapeType: 'ellipse', style: { fill: '#fff7e6', stroke: '#ffa940' } },
+                        { id: '2', label: '处理', shapeType: 'rect', style: { fill: '#e6f7ff', stroke: '#40a9ff' } },
+                        { id: '3', label: '结束', shapeType: 'circle', style: { fill: '#fff1f0', stroke: '#ff7875' } }
+                    ],
+                    edges: [{ source: '1', target: '2' }, { source: '2', target: '3' }]
+                };
+            }
+
+            graph.data(data);
+            graph.render();
+            graph.fitCenter();
+            toggleFrameAiPanel();
+            showFrameTooltip(index, 'AI流程图已生成！');
+        }
+
+        // 工具栏功能
         function toggleFrameEdgeMode(index) {
             frameEdgeMode = !frameEdgeMode;
             if (frameEdgeMode && frameEdgeSource) {
@@ -1771,6 +2152,17 @@
             }
         }
 
+        function clearFrameGraph(index) {
+            const graph = frameGraphs[index];
+            if (graph && confirm('确定清空所有节点和连线？')) {
+                graph.clear();
+                frameSelectedNode = null;
+                frameSelectedEdge = null;
+                hideFrameProps(index);
+                showFrameTooltip(index, '已清空');
+            }
+        }
+
         function showFrameTooltip(index, message) {
             const tooltip = document.getElementById(`frame-tooltip-${index}`);
             if (tooltip) {
@@ -1780,11 +2172,12 @@
             }
         }
 
+
         // 框图样式
         const frameStyle = document.createElement('style');
         frameStyle.textContent = `
             .frame-toolbar {
-                height: 40px;
+                height: 44px;
                 background: #fafbfc;
                 border-bottom: 1px solid #e8e8e8;
                 display: flex;
@@ -1793,7 +2186,7 @@
                 padding: 0 12px;
             }
             .frame-title {
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 600;
                 color: #333;
             }
@@ -1802,10 +2195,10 @@
                 gap: 6px;
             }
             .frame-btn {
-                padding: 4px 10px;
+                padding: 5px 12px;
                 border: 1px solid #d9d9d9;
                 background: #fff;
-                border-radius: 3px;
+                border-radius: 4px;
                 cursor: pointer;
                 font-size: 12px;
                 transition: all 0.2s;
@@ -1813,6 +2206,20 @@
             .frame-btn:hover {
                 border-color: #667eea;
                 color: #667eea;
+            }
+            .frame-btn-success {
+                background: #10b981 !important;
+                color: #fff !important;
+                border-color: #10b981 !important;
+            }
+            .frame-btn-success:hover {
+                background: #059669 !important;
+                border-color: #059669 !important;
+            }
+            .frame-btn-danger {
+                background: #fee2e2 !important;
+                color: #dc2626 !important;
+                border-color: #fca5a5 !important;
             }
             .frame-content {
                 flex: 1;
@@ -1828,7 +2235,7 @@
                 bottom: 10px;
                 left: 50%;
                 transform: translateX(-50%);
-                background: rgba(0,0,0,0.75);
+                background: rgba(0,0,0,0.8);
                 color: #fff;
                 padding: 6px 12px;
                 border-radius: 4px;
@@ -1839,8 +2246,165 @@
             .frame-tooltip.active {
                 display: block;
             }
+            .frame-node-panel {
+                position: absolute;
+                left: 0;
+                top: 44px;
+                bottom: 0;
+                width: 160px;
+                background: #fff;
+                border-right: 1px solid #e8e8e8;
+                padding: 12px;
+                overflow-y: auto;
+            }
+            .frame-node-panel h4 {
+                font-size: 12px;
+                color: #6b7280;
+                margin-bottom: 10px;
+                text-transform: uppercase;
+            }
+            .draggable-node {
+                padding: 8px 10px;
+                margin-bottom: 6px;
+                background: #f9fafb;
+                border: 2px dashed #d1d5db;
+                border-radius: 6px;
+                cursor: grab;
+                font-size: 12px;
+                color: #374151;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                transition: all 0.2s;
+            }
+            .draggable-node:hover {
+                background: #f3f4f6;
+                border-color: #9ca3af;
+            }
+            .frame-quick-styles {
+                margin-top: 16px;
+                padding-top: 16px;
+                border-top: 1px solid #e5e7eb;
+            }
+            .frame-quick-styles h4 {
+                font-size: 12px;
+                color: #6b7280;
+                margin-bottom: 8px;
+            }
+            .quick-style-btns {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 4px;
+            }
+            .quick-style-btns .frame-btn {
+                font-size: 10px;
+                padding: 4px 6px;
+            }
+            .hint {
+                font-size: 10px;
+                color: #9ca3af;
+                margin-top: 6px;
+            }
+            .frame-ai-panel {
+                position: absolute;
+                left: 50%;
+                top: 50px;
+                transform: translateX(-50%);
+                width: 400px;
+                background: #fff;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                padding: 12px;
+                display: none;
+                z-index: 100;
+            }
+            .frame-ai-panel.active {
+                display: block;
+            }
+            .frame-ai-panel h4 {
+                font-size: 13px;
+                color: #6b7280;
+                margin-bottom: 8px;
+            }
+            .frame-ai-panel textarea {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #d1d5db;
+                border-radius: 4px;
+                font-size: 12px;
+                min-height: 50px;
+                resize: vertical;
+                margin-bottom: 8px;
+            }
+            .frame-ai-panel textarea:focus {
+                outline: none;
+                border-color: #667eea;
+            }
+            .frame-ai-panel .frame-btn {
+                width: 100%;
+            }
+            .frame-properties-panel {
+                position: absolute;
+                right: 0;
+                top: 44px;
+                bottom: 0;
+                width: 220px;
+                background: #fff;
+                border-left: 1px solid #e8e8e8;
+                padding: 12px;
+                overflow-y: auto;
+                display: none;
+            }
+            .frame-properties-panel h4 {
+                font-size: 13px;
+                color: #6b7280;
+                margin-bottom: 12px;
+            }
+            .prop-group {
+                margin-bottom: 10px;
+            }
+            .prop-group label {
+                display: block;
+                font-size: 11px;
+                color: #6b7280;
+                margin-bottom: 3px;
+            }
+            .prop-group input,
+            .prop-group select {
+                width: 100%;
+                padding: 5px;
+                border: 1px solid #d1d5db;
+                border-radius: 3px;
+                font-size: 12px;
+            }
+            .prop-group input[type="color"] {
+                padding: 1px;
+                height: 28px;
+                cursor: pointer;
+            }
+            .frame-context-menu {
+                position: fixed;
+                background: #fff;
+                border: 1px solid #e0e0e0;
+                border-radius: 6px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                padding: 4px 0;
+                z-index: 2000;
+                display: none;
+                min-width: 140px;
+            }
+            .frame-context-menu div {
+                padding: 6px 14px;
+                cursor: pointer;
+                font-size: 12px;
+                transition: background 0.2s;
+            }
+            .frame-context-menu div:hover {
+                background: #f3f4f6;
+            }
         `;
         document.head.appendChild(frameStyle);
+
 
 
         function createFlowChart(width, height, index) {
