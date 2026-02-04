@@ -1275,15 +1275,10 @@
             // 返回兼容的对象
             return {
                 destroy: function() {
-                    if (this._jm) {
-                        this._jm.empty();
-                    }
                     container.innerHTML = '';
                 },
                 fitCenter: function() {
-                    if (this._jm) {
-                        this._jm.fit_center();
-                    }
+                    // jsMind 自动居中
                 },
                 zoomTo: function() {
                     // 简化实现
