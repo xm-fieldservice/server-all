@@ -271,6 +271,11 @@
             color: #667eea;
         }
 
+        .note-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateY(-2px);
+        }
+
         /* 图表区域 */
         .chart-area {
             flex: 1;
@@ -605,6 +610,10 @@
                 <div class="menu-item" data-chart="relation" onclick="setChartType('relation')">
                     <span class="menu-icon">🕸️</span>
                     <span class="menu-text">关系图谱</span>
+                </div>
+                <div class="menu-item" data-chart="notes" onclick="setChartType('notes')">
+                    <span class="menu-icon">📝</span>
+                    <span class="menu-text">笔记查询</span>
                 </div>
             </div>
         </div>
@@ -973,7 +982,8 @@
             swimlane: { icon: '🏊', name: '泳道视图' },
             frame: { icon: '📐', name: '框图视图' },
             flow: { icon: '🔄', name: '流程视图' },
-            relation: { icon: '🕸️', name: '关系图谱' }
+            relation: { icon: '🕸️', name: '关系图谱' },
+            notes: { icon: '📝', name: '笔记查询' }
         };
 
         console.log('[Init] Page loaded, chartTypes defined:', Object.keys(chartTypes));
@@ -1157,6 +1167,9 @@
                     break;
                 case 'relation':
                     chart = createRelationChart(width, height, index);
+                    break;
+                case 'notes':
+                    chart = createNotesChart(width, height, index);
                     break;
             }
             
@@ -2478,6 +2491,61 @@
             graph.render();
 
             return graph;
+        }
+
+        function createNotesChart(width, height, index) {
+            const container = document.getElementById(`chart-${index}`);
+            container.innerHTML = `
+                <div class="notes-container" style="width: 100%; height: 100%; padding: 16px; overflow-y: auto;">
+                    <div class="notes-header" style="margin-bottom: 16px;">
+                        <input type="text" id="notes-search-${index}" placeholder="🔍 搜索笔记..." 
+                            style="width: 100%; padding: 10px 14px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px;">
+                    </div>
+                    <div class="notes-grid" id="notes-grid-${index}" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px;">
+                        ${generateNotesCards()}
+                    </div>
+                </div>
+            `;
+
+            document.getElementById(`notes-search-${index}`).addEventListener('input', function(e) {
+                filterNotes(e.target.value, index);
+            });
+
+            return { type: 'notes', container: container };
+        }
+
+        function generateNotesCards() {
+            const mockNotes = [
+                { id: 1, title: '项目启动会议记录', date: '2026-02-01', tag: '会议', content: '讨论了项目目标、时间线和资源分配。' },
+                { id: 2, title: '技术选型文档', date: '2026-02-02', tag: '技术', content: '前端使用React，后端使用FastAPI，数据库PostgreSQL。' },
+                { id: 3, title: 'API设计草稿', date: '2026-02-03', tag: '设计', content: 'RESTful API设计原则，认证使用JWT。' },
+                { id: 4, title: '测试计划', date: '2026-02-04', tag: '测试', content: '单元测试覆盖率目标80%，集成测试用例编写中。' },
+                { id: 5, title: '用户反馈汇总', date: '2026-02-05', tag: '需求', content: '收集到5条主要需求，已排入迭代计划。' },
+                { id: 6, title: '代码规范文档', date: '2026-02-01', tag: '规范', content: 'ESLint配置、Git提交规范、代码Review流程。' }
+            ];
+
+            return mockNotes.map(note => `
+                <div class="note-card" data-title="${note.title}" data-content="${note.content}" data-tag="${note.tag}"
+                    style="background: #fff; border-radius: 8px; padding: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.08); cursor: pointer; transition: all 0.2s;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <span style="font-weight: 600; color: #1a1a2e;">${note.title}</span>
+                        <span style="font-size: 12px; color: #888;">${note.date}</span>
+                    </div>
+                    <div style="margin-bottom: 8px;">
+                        <span style="display: inline-block; padding: 2px 8px; background: #e6f7ff; color: #1890ff; border-radius: 4px; font-size: 12px;">${note.tag}</span>
+                    </div>
+                    <p style="color: #666; font-size: 13px; line-height: 1.5;">${note.content}</p>
+                </div>
+            `).join('');
+        }
+
+        function filterNotes(keyword, index) {
+            const grid = document.getElementById(`notes-grid-${index}`);
+            const cards = grid.querySelectorAll('.note-card');
+            cards.forEach(card => {
+                const text = card.getAttribute('data-title') + card.getAttribute('data-content') + card.getAttribute('data-tag');
+                card.style.display = text.toLowerCase().includes(keyword.toLowerCase()) ? 'block' : 'none';
+            });
         }
 
         // ==================== 数据转换 ====================
