@@ -1120,18 +1120,25 @@
 
         // ==================== 图表初始化 ====================
         function initChart(index, type) {
+            console.log('[Init] initChart called:', index, type);
             const container = document.getElementById(`chart-${index}`);
-            if (!container) return;
+            if (!container) {
+                console.error('[Init] Container not found:', `chart-${index}`);
+                return;
+            }
             
             const width = container.clientWidth;
             const height = container.clientHeight;
+            console.log('[Init] Container size:', width, 'x', height);
             
             // 销毁旧图表
             if (viewConfigs[index].chart) {
+                console.log('[Init] Destroying old chart');
                 viewConfigs[index].chart.destroy();
             }
             
             let chart;
+            console.log('[Init] Creating chart:', type);
             switch(type) {
                 case 'mindmap':
                     chart = createMindmapChart(width, height, index);
@@ -1154,6 +1161,7 @@
             }
             
             viewConfigs[index].chart = chart;
+            console.log('[Init] Chart created:', !!chart);
         }
 
         // ==================== 创建脑图 (jsMind) ====================
@@ -1898,14 +1906,21 @@
         }
 
         function setChartType(type) {
+            console.log('[Menu] setChartType called:', type);
             // 更新侧边栏选中状态
             document.querySelectorAll('.menu-item').forEach(item => {
                 item.classList.remove('active');
             });
-            document.querySelector(`[data-chart="${type}"]`).classList.add('active');
-            
+            const activeItem = document.querySelector(`[data-chart="${type}"]`);
+            console.log('[Menu] Active item found:', !!activeItem);
+            if (activeItem) {
+                activeItem.classList.add('active');
+            }
+
             // 更新第一个视图的图表类型
+            console.log('[Menu] Calling selectChartType(0, type)');
             selectChartType(0, type);
+            console.log('[Menu] Chart type updated to:', type);
         }
 
         // ==================== 事件监听 ====================
@@ -1923,6 +1938,17 @@
         // Global error handler
         window.addEventListener('error', (e) => {
             console.error('[Error]', e.message, '\n', e.stack);
+        });
+
+        // 菜单项点击事件绑定
+        document.querySelectorAll('.menu-item[data-chart]').forEach(item => {
+            item.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const type = this.getAttribute('data-chart');
+                console.log('[Menu] Clicked menu item:', type);
+                setChartType(type);
+            });
         });
 
         // ==================== 初始化 ====================
