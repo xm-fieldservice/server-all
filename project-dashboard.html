@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>项目管理看板 - Project Dashboard</title>
     <script src="https://unpkg.com/@antv/g6@4.8.0/dist/g6.min.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/jsmind@0.8.5/style/jsmind.css">
+    <script src="https://unpkg.com/jsmind@0.8.5/es6/jsmind.js"></script>
+    <script src="https://unpkg.com/jsmind@0.8.5/es6/jsmind.draggable-node.js"></script>
     <style>
         * {
             margin: 0;
@@ -684,6 +687,9 @@
         <button class="global-btn" onclick="resetAllData()">
             <span>🔄</span> 重置
         </button>
+        <button class="global-btn" onclick="openExperimentLab()" style="background: #722ed1; color: white;">
+            <span>🧪</span> 实验室
+        </button>
     </div>
 
     <!-- 提示消息 -->
@@ -1150,108 +1156,222 @@
             viewConfigs[index].chart = chart;
         }
 
-        // ==================== 创建脑图 ====================
+        // ==================== 创建脑图 (jsMind) ====================
         function createMindmapChart(width, height, index) {
-            console.log('[Mindmap] Creating chart for index:', index, 'size:', width, 'x', height);
-
-            // 转换数据为树形结构
-            const treeData = convertToTree(projectData.nodes);
-            console.log('[Mindmap] Tree data converted, nodes:', treeData?.children?.length || 0);
-
-            try {
-            const graph = new G6.TreeGraph({
-                container: `chart-${index}`,
-                width,
-                height,
-                modes: {
-                    default: [
-                        'drag-canvas',
-                        'zoom-canvas',
-                        'drag-node',
-                        {
-                            type: 'collapse-expand',
-                            onChange: function(item, collapsed) {
-                                const data = item.get('model');
-                                data.collapsed = collapsed;
-                                return true;
-                            }
-                        }
-                    ]
-                },
-                layout: {
-                    type: 'mindmap',
-                    direction: 'H',
-                    getHeight: () => 40,
-                    getWidth: (node) => Math.max(100, (node.label?.length || 4) * 14 + 20),
-                    getVGap: () => 25,
-                    getHGap: () => 80
-                },
-                defaultNode: {
-                    type: 'rect',
-                    size: [120, 40],
-                    style: { radius: 6, cursor: 'pointer' }
-                },
-                defaultEdge: {
-                    type: 'cubic-horizontal',
-                    style: { lineWidth: 2 }
-                }
-            });
-
-            // 节点样式
-            graph.node(node => {
-                const status = node.status || 'pending';
-                const colors = {
-                    completed: { fill: '#d4edda', stroke: '#28a745', text: '#155724' },
-                    active: { fill: '#fff3cd', stroke: '#ffc107', text: '#856404' },
-                    pending: { fill: '#f8f9fa', stroke: '#6c757d', text: '#495057' }
-                };
-                const color = colors[status] || colors.pending;
-                
-                return {
-                    style: {
-                        fill: color.fill,
-                        stroke: color.stroke,
-                        lineWidth: selectedNode?.id === node.id ? 3 : 2
-                    },
-                    labelCfg: {
-                        style: {
-                            fill: color.text,
-                            fontSize: 12,
-                            fontWeight: status === 'active' ? 600 : 400
-                        }
-                    }
-                };
-            });
-
-            // 事件绑定
-            graph.on('node:click', (evt) => {
-                const node = evt.item;
-                selectedNode = node.getModel();
-                updateDetailPanel();
-                syncSelectionToAllViews();
-            });
-
-            graph.on('node:contextmenu', (evt) => {
-                evt.preventDefault();
-                contextMenuNode = evt.item.getModel();
-                showContextMenu(evt.canvasX, evt.canvasY);
-            });
-
-            graph.on('node:dblclick', (evt) => {
-                selectedNode = evt.item.getModel();
-                updateDetailPanel();
-            });
-
-            graph.data(treeData);
-            graph.render();
-            graph.fitCenter();
-
-            console.log('[Mindmap] Chart rendered successfully');
-            return graph;
-            } catch(e) {
-                console.error('[Mindmap] Error creating chart:', e.message);
+            console.log('[jsMind] 开始创建脑图...');
+            
+            const containerId = `chart-${index}`;
+            const container = document.getElementById(containerId);
+            
+            // 清空容器
+            container.innerHTML = '';
+            container.style.width = '100%';
+            container.style.height = '100%';
+            
+            // 检查 jsMind 是否加载
+            if (typeof jsMind === 'undefined') {
+                console.error('[jsMind] jsMind 库未加载！');
+                container.innerHTML = '<div style="padding: 20px; color: red;">错误：jsMind 库未加载</div>';
                 return null;
             }
+            
+            console.log('[jsMind] jsMind 库已加载');
+            console.log('[jsMind] projectData.nodes 数量:', projectData.nodes?.length || 0);
+            
+            // 转换数据为 jsMind 格式
+            const mindData = convertToJsMindData(projectData);
+            console.log('[jsMind] 转换后的数据:', mindData);
+            console.log('[jsMind] 节点数量:', mindData.data.length);
+            
+            // jsMind 配置
+            const options = {
+                container: containerId,
+                theme: 'primary',
+                editable: true,
+                mode: 'full',
+                support_html: true,
+                view: {
+                    hmargin: 50,
+                    vmargin: 30,
+                    line_width: 2,
+                    line_color: '#c2c2c2'
+                },
+                layout: {
+                    hspace: 25,
+                    vspace: 15,
+                    pspace: 10
+                }
+            };
+            
+            // 创建 jsMind 实例
+            console.log('[jsMind] 创建实例...');
+            const jm = new jsMind(options);
+            
+            console.log('[jsMind] 显示数据...');
+            console.log('[jsMind] mindData 内容:', JSON.stringify(mindData, null, 2));
+            jm.show(mindData);
+            
+            // 检查是否成功渲染
+            console.log('[jsMind] 渲染完成');
+            
+            // 启用拖拽插件
+            if (jsMind.draggable) {
+                console.log('[jsMind] 启用拖拽插件');
+                jsMind.draggable(jm);
+            } else {
+                console.warn('[jsMind] 拖拽插件未加载');
+            }
+            
+            // 监听节点选择
+            jm.add_event_listener(function(type, data) {
+                if (type === jsMind.event_type.select) {
+                    const node = data[0];
+                    if (node) {
+                        // 查找对应的 projectData 节点
+                        const projectNode = projectData.nodes.find(n => n.id === node.id);
+                        if (projectNode) {
+                            selectedNode = projectNode;
+                            updateDetailPanel();
+                            syncSelectionToAllViews();
+                        }
+                    }
+                }
+            });
+            
+            // 监听拖拽完成
+            jm.add_event_listener(function(type, data) {
+                if (type === jsMind.event_type.drag_end) {
+                    const node = data[0];
+                    showToast(`节点 "${node.topic}" 已移动`);
+                    console.log(`[jsMind Drag] 节点 ${node.id} 已重新定位`);
+                }
+            });
+            
+            // 监听右键菜单
+            container.addEventListener('contextmenu', (e) => {
+                const target = e.target.closest('jmnode');
+                if (target) {
+                    e.preventDefault();
+                    const nodeId = target.getAttribute('nodeid');
+                    const node = jm.get_node(nodeId);
+                    if (node) {
+                        const projectNode = projectData.nodes.find(n => n.id === nodeId);
+                        if (projectNode) {
+                            contextMenuNode = projectNode;
+                            showContextMenu(e.clientX, e.clientY);
+                        }
+                    }
+                }
+            });
+            
+            // 返回兼容的对象
+            return {
+                destroy: function() {
+                    container.innerHTML = '';
+                },
+                fitCenter: function() {
+                    // jsMind 自动居中
+                },
+                zoomTo: function() {
+                    // 简化实现
+                },
+                getZoom: function() {
+                    return 1;
+                },
+                _jm: jm  // 保存 jsMind 实例以便后续操作
+            };
+        }
+        
+        // 转换 projectData 为 jsMind 数据格式
+        function convertToJsMindData(projectData) {
+            const a1Project = projectData.a1AutomationProject;
+            
+            const mindData = {
+                meta: {
+                    name: a1Project?.projectName || '1A通道自动化架构',
+                    author: 'PM看板',
+                    version: '1.0'
+                },
+                format: 'node_array',
+                data: []
+            };
+            
+            // 添加根节点
+            mindData.data.push({
+                id: 'root',
+                isroot: true,
+                topic: a1Project?.projectName || '1A通道自动化架构',
+                'background-color': '#1a1a2e',
+                'foreground-color': '#fff'
+            });
+            
+            // 如果没有1A通道数据，返回空脑图
+            if (!a1Project) {
+                console.warn('[jsMind] 未找到1A通道数据，显示空脑图');
+                return mindData;
+            }
+            
+            // Phase 1: MCP基础设施
+            if (a1Project.phase1) {
+                mindData.data.push({
+                    id: 'phase1',
+                    parentid: 'root',
+                    topic: a1Project.phase1.name,
+                    'background-color': '#f6ffed',
+                    direction: 'right'
+                });
+                
+                a1Project.phase1.tasks?.forEach((task, index) => {
+                    mindData.data.push({
+                        id: task.id || `p1-t${index}`,
+                        parentid: 'phase1',
+                        topic: task.label,
+                        direction: 'right'
+                    });
+                });
+            }
+            
+            // Phase 2: Agent智能层
+            if (a1Project.phase2) {
+                mindData.data.push({
+                    id: 'phase2',
+                    parentid: 'root',
+                    topic: a1Project.phase2.name,
+                    'background-color': '#fff7e6',
+                    direction: 'right'
+                });
+                
+                a1Project.phase2.tasks?.forEach((task, index) => {
+                    mindData.data.push({
+                        id: task.id || `p2-t${index}`,
+                        parentid: 'phase2',
+                        topic: task.label,
+                        direction: 'right'
+                    });
+                });
+            }
+            
+            // Phase 3: 闭环验证
+            if (a1Project.phase3) {
+                mindData.data.push({
+                    id: 'phase3',
+                    parentid: 'root',
+                    topic: a1Project.phase3.name,
+                    'background-color': '#fff1f0',
+                    direction: 'right'
+                });
+                
+                a1Project.phase3.tasks?.forEach((task, index) => {
+                    mindData.data.push({
+                        id: task.id || `p3-t${index}`,
+                        parentid: 'phase3',
+                        topic: task.label,
+                        direction: 'right'
+                    });
+                });
+            }
+            
+            return mindData;
         }
 
         // ==================== 创建甘特图 ====================
@@ -1703,6 +1823,17 @@
                     updateDetailPanel();
                     showToast('节点已删除');
                 }
+            }
+        }
+
+        function openExperimentLab() {
+            // 打开实验页面，在新窗口中
+            const labWindow = window.open('experiment-lab.html', 'experiment-lab', 'width=1200,height=800,scrollbars=yes');
+            if (labWindow) {
+                showToast('实验室已打开');
+            } else {
+                // 如果弹窗被阻止，在当前页面打开
+                window.location.href = 'experiment-lab.html';
             }
         }
 
