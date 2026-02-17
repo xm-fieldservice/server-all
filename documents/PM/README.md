@@ -73,6 +73,31 @@ DashScope向量化: 正常 ✅
 > **检查方法**: 代码审计 + grep搜索 + import验证
 > **后续用途**: Agent交叉检查基准、修复工作验收标准
 
+### 📝 Git提交基线
+
+**本次修复的代码基线提交**:
+```
+提交哈希: 577cf6b
+提交信息: fix(infrastructure): 修复向量化基础设施重复和假向量问题
+提交时间: 2026-02-17
+分支: db-browser-fix
+```
+
+**包含的修复文件**:
+- `ai_factory/rag/pgvector_index.py` - 假向量保护（98行）
+- `ai_factory/integrations/entries_ingest.py` - 重复代码重构（718行）
+- `ai_factory/vectorize_entries_with_ollama.py` - 文档修正（289行）
+- `documents/PM/README.md` - 检查报告存档（538行）
+
+**验证基线完整性的命令**:
+```bash
+# 查看本次提交详情
+git show 577cf6b --stat
+
+# 验证提交包含的文件
+git diff-tree --no-commit-id --name-only -r 577cf6b
+```
+
 ### ⚠️ 严重问题（P0级）
 
 #### 1. 假向量实现 - pgvector_index.py ❌❌❌
