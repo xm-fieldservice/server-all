@@ -373,51 +373,40 @@ class ProjectSessionImporter:
         
         return "\n".join(content_parts) if content_parts else "(empty session)"
 
-    def generate_title_and_summary(self, content: str) -> tuple[str, str]:
-        """使用LLM生成title和summary
+    def generate_title_and_summary_from_qa(self, user_question: str, assistant_answer: str) -> tuple[str, str]:
+        """基于问答对整体生成title和summary
         
+        title和summary_ai应该总结整个问答对的内容，而不是只基于问题。
+        
+        Args:
+            user_question: 用户问题
+            assistant_answer: 助手回答（可能为None）
+            
         Returns:
             tuple: (title, summary)
+            title: 不少于30字（除非内容本身很短）
+            summary: 300-500字（除非内容本身很少）
         """
-        content_len = len(content)
-        
-        if content_len <= 60:
-            # 短内容：直接使用
-            title = content[:60]
-            summary = content
-            print(f"    📝 短内容，直接使用原文作为title/summary")
-        elif content_len <= 600:
-            # 中等内容：只生成title
-            if USE_LOCAL_LLM:
-                try:
-                    title = generate_title_with_ollama(content, max_length=60)
-                    if not title:
-                        title = content[:60]
-                    print(f"    📝 LLM生成title: {title[:30]}...")
-                except Exception as e:
-                    print(f"    ⚠️  LLM失败，使用原文: {e}")
-                    title = content[:60]
-            else:
-                # 使用DeepSeek API
-                title = self._call_deepseek_for_title(content)
-            summary = content[:500]  # 截断作为summary
+        # 组合问答内容
+        combined_content = f"问题：{user_question}\n\n"
+        if assistant_answer:
+            combined_content += f"回答：{assistant_answer}"
         else:
-            # 长内容：生成title和summary
-            if USE_LOCAL_LLM:
-                try:
-                    title = generate_title_with_ollama(content, max_length=60)
-                    summary = generate_summary_with_ollama(content, max_length=500)
-                    if not title:
-                        title = content[:60]
-                    if not summary:
-                        summary = content[:500]
-                    print(f"    📝 LLM生成: title={title[:30]}..., summary={summary[:50]}...")
-                except Exception as e:
-                    print(f"    ⚠️  LLM失败，使用原文: {e}")
-                    title = content[:60]
-                    summary = content[:500]
-            else:
-                title, summary = self._call_deepseek_for_title_and_summary(content)
+            combined_content += "回答：（无）"
+        
+        # 调用DeepSeek API生成title和summary
+        title, summary = self._call_deepseek_for_qa_title_and_summary(
+            user_question, assistant_answer or "（无回答）"
+        )
+        
+        # 确保最小长度（如果内容允许）
+        if len(user_question) + len(assistant_answer or "") > 100:
+            if len(title) < 30:
+                print(f"    ⚠️  Title太短({len(title)}字)，使用原文补充")
+                title = user_question[:min(50, len(user_question))]
+            if len(summary) < 300:
+                print(f"    ⚠️  Summary太短({len(summary)}字)，使用原文补充")
+                summary = combined_content[:min(500, len(combined_content))]
         
         return title, summary
 
@@ -510,6 +499,78 @@ class ProjectSessionImporter:
             print(f"    ⚠️  DeepSeek API失败: {e}")
             return content[:60], content[:500]
 
+    def _call_deepseek_for_qa_title_and_summary(self, user_question: str, assistant_answer: str) -> tuple[str, str]:
+        """调用DeepSeek API基于问答对生成title和summary
+        
+        title和summary应该总结整个问答对，而不仅仅是问题。
+        """
+        import requests
+        
+        api_key = os.getenv("DEEPSEEK_API_KEY")
+        if not api_key:
+            print("    ⚠️  DEEPSEEK_API_KEY未设置")
+            combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
+            return combined[:60], combined[:500]
+        
+        prompt = f"""基于以下问答对，生成标题和内容摘要。
+
+要求：
+1. 标题（≥30字，≤60字）：概括问答对的核心主题和关键结论
+2. 摘要（≥300字，≤500字）：总结用户问题的核心诉求和AI回答的关键要点，突出价值收获
+
+格式要求：
+标题：[标题内容]
+摘要：[摘要内容]
+
+问答对：
+【用户问题】
+{user_question[:1500]}
+
+【AI回答】
+{assistant_answer[:2500]}
+"""
+        
+        try:
+            resp = requests.post(
+                "https://api.deepseek.com/v1/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": 800
+                },
+                timeout=60
+            )
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"]
+            
+            # 解析结果
+            title = ""
+            summary = ""
+            for line in text.split("\n"):
+                if line.startswith("标题：") or line.startswith("标题:"):
+                    title = line[3:].strip() if line.startswith("标题：") else line[2:].strip()
+                elif line.startswith("摘要：") or line.startswith("摘要:"):
+                    summary = line[3:].strip() if line.startswith("摘要：") else line[2:].strip()
+            
+            # 清理可能的引号
+            title = title.strip('"\'')
+            summary = summary.strip('"\'')
+            
+            if not title:
+                combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
+                title = combined[:60]
+            if not summary:
+                combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
+                summary = combined[:500]
+            
+            print(f"    📝 DeepSeek生成: title={title[:40]}...")
+            return title, summary
+        except Exception as e:
+            print(f"    ⚠️  DeepSeek API失败: {e}")
+            combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
+            return combined[:60], combined[:500]
+
     def import_session(self, session: Dict) -> bool:
         """📥 [1] 导入单个session，执行LLM处理后入库"""
         session_id = session.get('id', '')
@@ -590,8 +651,8 @@ class ProjectSessionImporter:
                 qa_meta["qa_index"] = qa_idx
                 qa_meta["section_type"] = "qa_pair"
                 
-                # LLM 生成 title 和 summary（基于用户问题）
-                qa_title, qa_summary = self.generate_title_and_summary(user_question)
+                # LLM 生成 title 和 summary（基于问答对整体）
+                qa_title, qa_summary = self.generate_title_and_summary_from_qa(user_question, assistant_answer or "")
                 
                 # 构建 content
                 qa_content_parts = [
@@ -645,7 +706,7 @@ class ProjectSessionImporter:
         
         # 🔥 关键步骤2：LLM处理生成title和summary
         print(f"  🤖 LLM处理中...")
-        llm_title, llm_summary = self.generate_title_and_summary(session_content)
+        llm_title, llm_summary = self.generate_title_and_summary_from_qa(session_content, "")
         
         # 构建完整内容（包含metadata）
         content_parts = [
