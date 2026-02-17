@@ -1,0 +1,17 @@
+# PM-agent 数据同步定时任务配置
+# 
+# 安装方法:
+#   crontab -e
+#   然后粘贴以下内容
+
+# 每15分钟运行一次同步流水线（推荐）
+*/15 * * * * cd /root/ai-factory && ./scripts/sync_pipeline.sh >> logs/sync_cron.log 2>&1
+
+# 每小时检查一次容器状态（确保PostgreSQL运行）
+0 * * * * docker ps | grep rag_postgres || docker start rag_postgres
+
+# 每天凌晨2点进行完整备份
+0 2 * * * cd /root/ai-factory && docker exec rag_postgres pg_dumpall -U rag_user > data/postgres/backups/auto_backup_$(date +\%Y\%m\%d_\%H\%M\%S).sql 2>&1
+
+# 每周日凌晨3点清理旧日志（保留最近30天）
+0 3 * * 0 find /root/ai-factory/logs -name "*.log" -mtime +30 -delete
