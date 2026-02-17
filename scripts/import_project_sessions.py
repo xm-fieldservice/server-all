@@ -201,8 +201,159 @@ class ProjectSessionImporter:
         
         return tags
     
+    def extract_text_from_message(self, msg: dict) -> str:
+        """从消息中提取文本内容（从 content_parts）
+        
+        OpenCode 存储结构:
+        - storage/message/ses_xxx/msg_yyy.json - 消息元数据
+        - storage/part/msg_yyy/*.json - 消息内容（content_parts）
+        """
+        msg_id = msg.get("id", "")
+        
+        # 尝试从 part 目录读取 content_parts
+        parts_dir = Path.home() / f".local/share/opencode/storage/part/{msg_id}"
+        if parts_dir.exists():
+            parts = []
+            for part_file in sorted(parts_dir.glob("*.json")):
+                try:
+                    part_data = json.loads(part_file.read_text())
+                    parts.append(part_data)
+                except Exception:
+                    continue
+            
+            if parts:
+                texts = []
+                for part in parts:
+                    part_type = part.get("type", "")
+                    if part_type == "text":
+                        texts.append(part.get("text", ""))
+                    elif part_type == "tool_use":
+                        tool_name = part.get("name", "unknown")
+                        tool_input = part.get("input", {})
+                        texts.append(f"【工具调用: {tool_name}】")
+                        if isinstance(tool_input, dict) and tool_input:
+                            texts.append(json.dumps(tool_input, ensure_ascii=False, indent=2))
+                    elif part_type == "tool_result":
+                        content = part.get("content", "")
+                        if isinstance(content, str):
+                            texts.append(content[:500])
+                        else:
+                            texts.append(json.dumps(content, ensure_ascii=False, indent=2)[:500])
+                    elif part_type == "reasoning_content":
+                        texts.append(f"【思考内容】\n{part.get('text', '')}")
+                    elif part_type == "redacted_reasoning_content":
+                        texts.append("【思考内容-已编辑】")
+                
+                full_text = "\n".join(texts)
+                if full_text.strip():
+                    return full_text
+        
+        # 回退：使用旧的逻辑
+        if "_extracted_text" in msg:
+            return msg["_extracted_text"]
+        
+        # 优先使用 summary.title
+        summary = msg.get("summary", {})
+        if summary and isinstance(summary, dict):
+            title = summary.get("title", "")
+            if title:
+                return title
+        
+        return msg.get("text", "") or msg.get("content", "")
+    
+    def extract_qa_pairs_from_messages(self, session_id: str) -> List[Dict[str, str]]:
+        """从 message 目录提取问答对
+        
+        OpenCode 数据结构:
+        - storage/message/ses_xxx/msg_yyy.json - 消息元数据
+        - storage/part/msg_yyy/*.json - 消息内容（content_parts）
+        
+        Returns:
+            List[Dict]: [{"user": "...", "assistant": "..."}, ...]
+        """
+        qa_pairs = []
+        message_dir = Path.home() / ".local/share/opencode/storage/message" / session_id
+        
+        if not message_dir.exists():
+            return qa_pairs
+        
+        # 读取所有消息并按时间排序
+        messages = []
+        for msg_file in message_dir.glob("msg_*.json"):
+            try:
+                data = json.loads(msg_file.read_text())
+                messages.append(data)
+            except Exception:
+                continue
+        
+        # 按创建时间排序
+        messages.sort(key=lambda m: m.get("time", {}).get("created", 0))
+        
+        # 提取每条消息的文本内容
+        for msg in messages:
+            msg["_extracted_text"] = self.extract_text_from_message(msg)
+        
+        # 过滤空消息
+        messages = [m for m in messages if m.get("_extracted_text", "").strip()]
+        
+        # 遍历消息，提取问答对
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            role = msg.get("role", "")
+            
+            if role == "user":
+                user_content = msg.get("_extracted_text", "")
+                
+                if not user_content:
+                    i += 1
+                    continue
+                
+                # 查找紧跟其后的 assistant 消息
+                assistant_content = ""
+                if i + 1 < len(messages):
+                    next_msg = messages[i + 1]
+                    if next_msg.get("role") == "assistant":
+                        assistant_content = next_msg.get("_extracted_text", "")
+                        i += 2  # 跳过 assistant 消息
+                    else:
+                        i += 1
+                else:
+                    i += 1
+                
+                qa_pairs.append({
+                    "user": user_content[:1000],
+                    "assistant": assistant_content[:5000] if assistant_content else None
+                })
+            else:
+                i += 1
+        
+        return qa_pairs
+    
     def extract_session_content(self, session: Dict) -> str:
-        """提取session的实际内容（messages）"""
+        """提取session的实际内容（messages）
+        
+        优先从 message 目录提取问答对格式的内容
+        """
+        session_id = session.get('id', '')
+        
+        # 首先尝试从 message 目录提取问答对
+        qa_pairs = self.extract_qa_pairs_from_messages(session_id)
+        
+        if qa_pairs:
+            # 转换为可读格式
+            content_parts = []
+            for i, qa in enumerate(qa_pairs, 1):
+                user = qa.get("user", "")
+                assistant = qa.get("assistant", "")
+                content_parts.append(f"### 问答对 #{i}")
+                content_parts.append(f"**👤 USER**: {user}")
+                if assistant:
+                    content_parts.append(f"**🤖 ASSISTANT**: {assistant[:500]}")
+                content_parts.append("---")
+            return "\n".join(content_parts)
+        
+        # 回退：提取 messages
         content_parts = []
         
         # 提取messages
@@ -387,7 +538,110 @@ class ProjectSessionImporter:
         
         # 🔥 关键步骤1：提取session内容
         print(f"  📖 提取内容: {session_id[:25]}...")
-        session_content = self.extract_session_content(session)
+        
+        # 先构建 scene_tags 和 extra_meta（提前定义以便问答对使用）
+        scene_tags = self.build_scene_tags(session)
+        extra_meta = {
+            "source_session_id": session_id,
+            "source_system": "opencode",
+            "import_method": "project_importer_v2",
+            "project_code": self.project_code,
+            "operator": self.operator,
+            "space_type": "session_record",
+            "section": "",
+            "section_type": "session",
+            "visibility": "private",
+            "access_control": f"project:{self.project_code}",
+            "original_directory": directory,
+            "original_title": original_title,
+            "slug": session.get('slug', ''),
+            "version": session.get('version', ''),
+            "llm_processed": True,
+        }
+        
+        qa_pairs = self.extract_qa_pairs_from_messages(session_id)
+        
+        # 根据是否有问答对选择不同的处理方式
+        if qa_pairs and len(qa_pairs) > 0:
+            # 有问答对：每个问答对单独入库
+            print(f"  💬 发现 {len(qa_pairs)} 个问答对")
+            imported_count = 0
+            
+            for qa_idx, qa in enumerate(qa_pairs):
+                user_question = qa.get("user", "")
+                assistant_answer = qa.get("assistant")
+                
+                if not user_question:
+                    continue
+                
+                # 构建单个问答对的 payload
+                # input_content = 用户问题
+                # answer_payload = 助手回答
+                answer_payload = None
+                if assistant_answer:
+                    answer_payload = {"text": assistant_answer}
+                
+                # 构建 scene_tags
+                qa_tags = dict(scene_tags)
+                qa_tags["type"] = ["qa_pair"]  # 标记为问答对
+                
+                # 构建 extra_meta
+                qa_meta = dict(extra_meta)
+                qa_meta["qa_index"] = qa_idx
+                qa_meta["section_type"] = "qa_pair"
+                
+                # LLM 生成 title 和 summary（基于用户问题）
+                qa_title, qa_summary = self.generate_title_and_summary(user_question)
+                
+                # 构建 content
+                qa_content_parts = [
+                    f"# {qa_title}",
+                    f"\n**Session**: `{session_id}`",
+                    f"**问答序号**: {qa_idx + 1}",
+                    f"**原始问题**: {user_question}",
+                ]
+                if assistant_answer:
+                    qa_content_parts.append(f"\n**AI回答**:\n{assistant_answer[:1000]}")
+                
+                qa_full_content = "\n".join(qa_content_parts)
+                
+                # 构建 payload
+                qa_payload = {
+                    "input_content": user_question,  # ✅ 用户问题
+                    "title": qa_title,
+                    "summary_ai": qa_summary,
+                    "raw_text": qa_full_content,
+                    "project_code": self.project_code,
+                    "user_id": self.operator,
+                    "note_datetime": created_dt.isoformat(),
+                    "extra_context": {
+                        "tags_snapshot": qa_tags
+                    },
+                    "extra_meta": qa_meta
+                }
+                
+                # 添加 answer_payload
+                if answer_payload:
+                    qa_payload["answer_payload"] = answer_payload  # ✅ 助手回答
+                
+                # 导入
+                try:
+                    result = entries_ingest(qa_payload)
+                    entry_id = result.get("entries", [{}])[0].get("entry_id", "unknown")
+                    imported_count += 1
+                except Exception as e:
+                    print(f"    ⚠️  导入失败 [{qa_idx}]: {e}")
+            
+            if imported_count > 0:
+                print(f"  ✅ 已导入 {imported_count} 个问答对")
+                self.stats['imported'] += imported_count
+                return True
+            else:
+                self.stats['failed'] += 1
+                return False
+        else:
+            # 无问答对：使用原有逻辑（整个 session 作为一条记录）
+            session_content = self.extract_session_content(session)
         
         # 🔥 关键步骤2：LLM处理生成title和summary
         print(f"  🤖 LLM处理中...")

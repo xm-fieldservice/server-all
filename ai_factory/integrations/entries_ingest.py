@@ -129,17 +129,19 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     raw_text = payload["raw_text"]
     project_code = payload["project_code"]
     user_id = payload.get("user_id", "pm-agent")
-    note_datetime = payload.get("note_datetime")
     
     entry_id = f"ent_{uuid4().hex[:8]}"
     created_at = datetime.utcnow().isoformat()
     
     # 构建entry
+    # 优先使用 input_content（问答对的用户问题），否则使用 raw_text
+    input_content = payload.get("input_content", raw_text)
+    
     entry: Dict[str, Any] = {
         "entry_id": entry_id,
         "title": title,
         "summary_ai": summary,
-        "input_content": raw_text,
+        "input_content": input_content,
         "project_code": project_code,
         "user_id": user_id,
         "created_at": created_at,
@@ -155,9 +157,10 @@ def entries_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     if extra_meta:
         entry.setdefault("extra_meta", {}).update(extra_meta)
     
-    # 添加note_datetime
-    if note_datetime:
-        entry["note_datetime"] = note_datetime
+    # 添加 answer_payload（问答对的回答）
+    answer_payload = payload.get("answer_payload")
+    if answer_payload:
+        entry["answer_payload"] = answer_payload
     
     # 应用tree字段
     try:
