@@ -101,3 +101,73 @@ result = run_something(...)
 
 这有助于保持整个工作区的 **能力集中、项目解耦、演进有序**。
 
+---
+
+## 重要修复记录
+
+### 2025-02-18: 问答对解析修复 (Q&A Pair Extraction Fix)
+
+**问题描述**:
+OpenCode session 导入到 entries 表时，`answer_payload` 字段始终为 null，且 `input_content` 字段内容不正确。
+
+**根本原因**:
+- OpenCode 本地存储结构分为两部分：
+  - `~/.local/share/opencode/storage/message/ses_xxx/msg_yyy.json` - 消息元数据（role, time, tokens 等）
+  - `~/.local/share/opencode/storage/part/msg_yyy/*.json` - 消息实际内容（content_parts）
+- 之前的实现只读取了元数据文件，没有读取 part 目录下的实际内容
+- `entries_ingest.py` 也没有正确处理 `answer_payload` 和 `input_content` 字段
+
+**解决方案**:
+1. **新增 `extract_text_from_message()` 方法** (`scripts/import_project_sessions.py`):
+   - 从 `storage/part/msg_id/*.json` 读取 `content_parts`
+   - 支持多种 part 类型：`text`, `tool_use`, `tool_result`, `reasoning_content`
+   - 正确处理 tool 调用和结果展示
+
+2. **重构 `extract_qa_pairs_from_messages()` 方法**:
+   - 先提取每条消息的完整文本内容
+   - 过滤空消息
+   - 正确配对 user 和 assistant 消息
+   - 提取 assistant 回答内容到 `answer_payload`
+
+3. **修复 `entries_ingest.py`**:
+   - 添加 `answer_payload` 字段支持
+   - 优先使用 `input_content` 字段（如果提供），否则使用 `raw_text`
+
+**数据结构**:
+```json
+{
+  "input_content": "用户问题文本",
+  "answer_payload": {"text": "助手回答文本"},
+  "title": "LLM生成的标题",
+  "summary_ai": "LLM生成的摘要",
+  "raw_text": "完整格式化内容"
+}
+```
+
+**验证命令**:
+```bash
+# 查看导入的记录
+python3 -c "
+from ai_factory.db.pgvector_client import get_connection
+conn = get_connection()
+with conn.cursor() as cur:
+    cur.execute('''
+        SELECT entry_id, input_content, answer_payload::text
+        FROM entries 
+        WHERE project_code = 'ai-factory'
+        LIMIT 3
+    ''')
+    for row in cur.fetchall():
+        print(f'Q: {row[1][:50]}...')
+        print(f'A: {row[2][:100]}...')
+        print()
+"
+```
+
+**影响范围**:
+- `scripts/import_project_sessions.py` - 问答对提取逻辑
+- `ai_factory/integrations/entries_ingest.py` - 入库字段处理
+
+**提交记录**: `f644696` - fix(ingest): correct Q&A pair extraction from OpenCode storage
+
+
