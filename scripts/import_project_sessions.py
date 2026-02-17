@@ -544,14 +544,31 @@ class ProjectSessionImporter:
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"]
             
-            # 解析结果
+            # 解析结果 - 改进版，处理多行摘要
             title = ""
             summary = ""
+            in_summary = False
+            summary_lines = []
+            
             for line in text.split("\n"):
-                if line.startswith("标题：") or line.startswith("标题:"):
-                    title = line[3:].strip() if line.startswith("标题：") else line[2:].strip()
-                elif line.startswith("摘要：") or line.startswith("摘要:"):
-                    summary = line[3:].strip() if line.startswith("摘要：") else line[2:].strip()
+                line_stripped = line.strip()
+                
+                # 解析标题
+                if line_stripped.startswith("标题：") or line_stripped.startswith("标题:"):
+                    title = line_stripped[3:].strip() if line_stripped.startswith("标题：") else line_stripped[2:].strip()
+                    in_summary = False
+                # 检测摘要开始
+                elif line_stripped.startswith("摘要：") or line_stripped.startswith("摘要:"):
+                    # 检查同一行是否还有内容
+                    content = line_stripped[3:].strip() if line_stripped.startswith("摘要：") else line_stripped[2:].strip()
+                    if content:
+                        summary_lines.append(content)
+                    in_summary = True
+                # 如果在摘要区域，收集内容
+                elif in_summary and line_stripped:
+                    summary_lines.append(line_stripped)
+            
+            summary = "\n".join(summary_lines)
             
             # 清理可能的引号
             title = title.strip('"\'')
