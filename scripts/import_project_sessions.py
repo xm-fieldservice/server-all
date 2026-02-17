@@ -548,5 +548,131 @@ def main():
     importer.run(batch_all=args.batch_all, dry_run=args.dry_run)
 
 
+# ==============================================================================
+# 🎯 便利API - 供其他Agent和脚本调用
+# ==============================================================================
+
+def import_single_session(
+    session_id: str,
+    project_code: str,
+    operator: str = "pm-agent"
+) -> Dict[str, Any]:
+    """导入单个session（便利API）
+    
+    供Agent直接调用，无需实例化Importer类。
+    
+    Args:
+        session_id: Session ID
+        project_code: 项目代码（数据隔离标识）
+        operator: 操作者身份
+        
+    Returns:
+        dict: {
+            "success": bool,
+            "entry_id": str or None,
+            "title": str or None,
+            "message": str
+        }
+    """
+    importer = ProjectSessionImporter(
+        project_code=project_code,
+        operator=operator
+    )
+    
+    # 获取所有sessions
+    sessions = importer.get_opencode_sessions()
+    
+    # 找到目标session
+    target_session = None
+    for session in sessions:
+        if session.get('id') == session_id:
+            target_session = session
+            break
+    
+    if not target_session:
+        return {
+            "success": False,
+            "entry_id": None,
+            "title": None,
+            "message": f"未找到session: {session_id}"
+        }
+    
+    # 执行导入
+    success = importer.import_session(target_session)
+    
+    if success:
+        # 获取导入结果
+        return {
+            "success": True,
+            "entry_id": f"ent_{session_id[:8]}",  # 简化返回
+            "title": target_session.get('title', '')[:60],
+            "message": f"✅ 导入成功: {session_id[:25]}..."
+        }
+    else:
+        return {
+            "success": False,
+            "entry_id": None,
+            "title": None,
+            "message": f"❌ 导入失败: {session_id[:25]}..."
+        }
+
+
+def import_all_sessions(
+    project_code: str,
+    operator: str = "pm-agent",
+    dry_run: bool = False
+) -> Dict[str, Any]:
+    """批量导入所有未归档sessions（便利API）
+    
+    Args:
+        project_code: 项目代码
+        operator: 操作者身份
+        dry_run: 是否模拟运行
+        
+    Returns:
+        dict: {
+            "success": bool,
+            "stats": {
+                "found": int,
+                "imported": int,
+                "skipped": int,
+                "failed": int
+            },
+            "message": str
+        }
+    """
+    importer = ProjectSessionImporter(
+        project_code=project_code,
+        operator=operator
+    )
+    
+    importer.run(batch_all=True, dry_run=dry_run)
+    
+    return {
+        "success": True,
+        "stats": dict(importer.stats),
+        "message": f"📊 导入完成: 发现{importer.stats['found']}个, "
+                   f"成功{importer.stats['imported']}个"
+    }
+
+
+def check_session_imported(session_id: str) -> bool:
+    """检查session是否已导入（便利API）
+    
+    Args:
+        session_id: Session ID
+        
+    Returns:
+        bool: 是否已导入
+    """
+    # 临时创建importer来检查（不需要project_code）
+    importer = ProjectSessionImporter(project_code="temp")
+    return importer.is_session_imported(session_id)
+
+
+# ==============================================================================
+# CLI入口
+# ==============================================================================
+
 if __name__ == "__main__":
     main()
