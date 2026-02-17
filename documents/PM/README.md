@@ -293,6 +293,139 @@ strategy = get_strategy(VectorizationBackend.OLLAMA)
 embedding = strategy.embed("文本")
 ```
 
+---
+
+## 🎯 Phase 3 成果 - LLM处理与入库通道分离（大改动方案）
+
+### 📋 实施目标
+
+**分离LLM处理（title/summary生成）和入库通道，使职责更清晰**
+
+### 🏗️ 新节点架构
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  🔒 访问控制节点 [0]                                          │
+│  职责: PM-agent (审核授权)                                    │
+│  功能: 验证project_code + operator身份                        │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ 验证通过
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  📥 脚本工具: session_to_entries [1]                          │
+│  职责: PM-clerk (执行LLM处理)                                 │
+│                                                              │
+│  文件: scripts/import_project_sessions.py                    │
+│                                                              │
+│  输入:  OpenCode session文件 (*.json)                        │
+│   ↓                                                        │
+│  处理:  - 提取session内容(messages)                         │
+│         - LLM生成title (≤60字符)                            │
+│         - LLM生成summary (≤500字符)                         │
+│   ↓                                                        │
+│  输出:  完整payload {title, summary_ai, content, tags...}    │
+│                                                              │
+│  LLM后端: 本地Ollama 或 云端DeepSeek                         │
+└──────────────────────────┬──────────────────────────────────┘
+                           │ 完整payload (已LLM处理)
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│  💾 脚本工具: entries_ingest [2]                              │
+│  职责: Shared (基础设施)                                      │
+│                                                              │
+│  文件: ai_factory/integrations/entries_ingest.py             │
+│                                                              │
+│  输入:  必须包含字段:                                        │
+│         - title (LLM生成)                                    │
+│         - summary_ai (LLM生成)                               │
+│         - raw_text                                           │
+│         - project_code                                       │
+│   ↓                                                        │
+│  处理:  - 验证必填字段                                       │
+│         - 写入entries表                                      │
+│         - 调用向量化策略模式                                 │
+│   ↓                                                        │
+│  输出:  entry_id                                             │
+│                                                              │
+│  通道A: 直写 (1号通道) - 同步调用                            │
+│  通道B: 排队 (2号通道) - HTTP API异步队列                    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 📁 修改文件
+
+| 文件 | 变更 | 说明 |
+|------|------|------|
+| `entries_ingest.py` | 重写 | 移除LLM处理，从~720行简化为~100行 |
+| `import_project_sessions.py` | 增强 | 新增LLM处理逻辑，+200行 |
+
+### ✨ 核心变更
+
+**entries_ingest.py 变更：**
+
+```python
+# ❌ 移除（原内部逻辑）
+- 文本长度判断
+- 条件性LLM调用(Ollama/DeepSeek)
+- title/summary生成
+
+# ✅ 保留（纯入库职责）
++ 必填字段验证(title, summary_ai, raw_text, project_code)
++ 写入entries表
++ 调用向量化策略模式
+```
+
+**import_project_sessions.py 新增：**
+
+```python
+# 新增方法
++ extract_session_content()      # 提取messages
++ generate_title_and_summary()   # LLM生成
++ _call_deepseek_for_title()     # DeepSeek API
++ _call_deepseek_for_summary()   # DeepSeek API
+
+# import_session() 重构为4步
+1. 提取session内容
+2. LLM处理(title/summary)
+3. 构建完整payload
+4. 调用entries_ingest入库
+```
+
+### 🔄 调用方式对比
+
+**旧方式（LLM在内部隐式处理）：**
+```python
+# ❌ 不推荐（导致import_project_sessions跳过LLM）
+entries_ingest({
+    "raw_text": content  # 内部判断长度→可能LLM处理
+})
+```
+
+**新方式（LLM在外层显式处理）：**
+```python
+# ✅ 推荐（职责清晰）
+# 📥 [1] 先LLM处理
+title, summary = generate_title_and_summary(content)
+payload = {
+    "title": title,           # ✅ LLM生成
+    "summary_ai": summary,    # ✅ LLM生成
+    "raw_text": content,
+    "project_code": project_code
+}
+
+# 💾 [2] 再入库
+entries_ingest(payload)  # 纯入库，不处理LLM
+```
+
+### 📊 改进效果
+
+| 指标 | 优化前 | 优化后 | 改进 |
+|------|--------|--------|------|
+| LLM处理位置 | entries_ingest内部 | import_project_sessions | 职责清晰 |
+| 代码行数 | entries_ingest: 720行 | entries_ingest: 100行 | -86% |
+| 可维护性 | 低（隐式逻辑） | 高（显式节点） | ⬆️ |
+| 数据质量 | 部分数据无LLM处理 | 所有数据经LLM处理 | ✅ |
+
 ### 📦 归档文件
 
 旧实现已归档到 `scripts/archived/vectorization/`：
