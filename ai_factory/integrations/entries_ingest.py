@@ -23,15 +23,17 @@ import requests
 from ai_factory.agents.entry_agents import ChunkResult
 from ai_factory.db.entries_repo import insert_entry
 from ai_factory.domain.tree_meta import TreeMeta, apply_tree_meta_to_entry
+
+# 使用新的统一向量化策略模式
+from ai_factory.vectorization import (
+    get_strategy,
+    VectorizationBackend,
+)
+
+# 保留标题/摘要生成函数（后续迁移到LLM策略模式）
 from ai_factory.vectorize_entries_with_ollama import (
-    _build_embedding_text,
-    call_ollama_embedding,
-    upsert_entry_embedding,
     generate_title_with_ollama,
     generate_summary_with_ollama,
-)
-from ai_factory.vectorize_entries_with_dashscope import (
-    generate_embedding as _call_dashscope_embedding,
 )
 
 
@@ -275,7 +277,7 @@ def _append_failed_entry_to_md(raw_text: str, payload: Dict[str, Any], error: Ba
 def _vectorize_entry_sync(entry: Dict[str, Any], context: str = "entries_ingest") -> bool:
     """同步向量化 entry 并写入 embeddings 表。
 
-    统一封装向量化逻辑，避免代码重复。被3处调用：
+    统一封装向量化逻辑，使用策略模式。被多处调用：
     - 长文本切块后的第一个 chunk
     - 中等长度文本的完整 entry
     - 异步任务兜底流程
@@ -288,13 +290,12 @@ def _vectorize_entry_sync(entry: Dict[str, Any], context: str = "entries_ingest"
         bool: 是否成功完成向量化
     """
     try:
-        emb_text = _build_embedding_text(entry)
-        embedding = _call_dashscope_embedding(emb_text)
-        print(f"[{context}] 使用DashScope向量化完成 (1024维)")
-        entry_for_embedding = dict(entry)
-        entry_for_embedding.setdefault("mode", "NOTE")
-        upsert_entry_embedding(entry_for_embedding, embedding)
-        return True
+        # 使用策略模式获取默认向量化策略 (DashScope)
+        strategy = get_strategy()
+        success = strategy.process_entry(entry)
+        if success:
+            print(f"[{context}] 使用DashScope向量化完成 (1024维)")
+        return success
     except Exception as exc:  # noqa: BLE001
         print(f"[{context}] 同步向量化失败，将由异步脚本补齐: {exc!r}")
         return False
