@@ -435,6 +435,221 @@ entries_ingest(payload)  # 纯入库，不处理LLM
 
 **注意**: 原文件仍保留（因 `generate_title_with_ollama` 等函数仍在使用）
 
+---
+
+## 🎉 里程碑：PM-Agent具象化完成（2026-02-17）
+
+### 🏆 达成目标
+
+**打造了一个具备记忆能力的、可自举的项目管理Agent实体（PM-Agent最小MVP）**
+
+### 📈 开发历程（15次迭代）
+
+```
+34f581f → 577cf6b → 1964dc3 → 6737fd2 → d4dad31 → 7ad1549 → 164cfdb
+  ↓        ↓         ↓         ↓         ↓         ↓         ↓
+角色系统  基础设施   Git基线   工作机制  策略模式   RAG重构   归档旧代码
+
+→ a76e315 → cba908d → 1c11053 → b2c8afa → de86d01 → b8fb96b
+   ↓         ↓         ↓         ↓         ↓         ↓
+架构文档   节点规范   LLM分离   Phase3文档 工具打压  PM-Agent具象化
+```
+
+### ✅ 完成的所有工作
+
+#### **1. 基础设施层（底座）**
+- ✅ PostgreSQL + pgvector 部署
+- ✅ entries表设计（支持scene_tags、extra_meta）
+- ✅ entry_embeddings向量表
+- ✅ 修复假向量问题（pgvector_index.py运行时保护）
+- ✅ 修复重复代码问题（entries_ingest.py统一函数）
+
+#### **2. 向量化架构层（策略模式）**
+- ✅ 统一向量化策略模式（ai_factory/vectorization/）
+- ✅ DashScopeStrategy（生产环境）
+- ✅ OllamaStrategy（本地备用）
+- ✅ 消除代码重复（-67%）
+- ✅ 标准化接口（embed/build_text/save/process_entry）
+
+#### **3. 数据处理流程层（节点化）**
+- ✅ 🔒 [0] 访问控制节点（project_code验证）
+- ✅ 📥 [1] session_to_entries（LLM处理）
+- ✅ 💾 [2] entries_ingest（纯入库通道）
+- ✅ LLM处理与入库分离（大改动方案）
+- ✅ 工具打压实在（CLI + Python API标准化）
+
+#### **4. Agent实体层（具象化）**
+- ✅ PM-agent配置（.opencode/agents/pm-agent.md）
+- ✅ PM-clerk配置（书记员职责）
+- ✅ 工具调用能力（📥/💾/🧠）
+- ✅ 自举机制（循环上升）
+- ✅ 私域数据自动标记（project_code注入）
+
+### 🏗️ 最终架构图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    🔒 PM-agent（Agent实体）                   │
+│  - 职责：项目管理和协调                                       │
+│  - 能力：工具调用 + 记忆检索 + 自举进化                        │
+│  - 标记：自动注入project_code="pm-agent"                      │
+└──────────────────────────┬──────────────────────────────────┘
+                           │
+           ┌───────────────┼───────────────┐
+           │               │               │
+           ▼               ▼               ▼
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│  📥 [1]      │  │  💾 [2]      │  │  🧠 RAG      │
+│  session_to_ │  │  entries_    │  │  检索         │
+│  entries     │→ │  ingest      │  │              │
+│              │  │              │  │              │
+│  工具：       │  │  工具：       │  │  工具：       │
+│  import_     │  │  entries_    │  │  entries_    │
+│  project_    │  │  ingest_cli  │  │  rag         │
+│  sessions.py │  │  .py         │  │              │
+│              │  │              │  │              │
+│  - LLM处理   │  │  - 验证      │  │  - 向量检索  │
+│  - title生成 │  │  - 入库      │  │  - 项目过滤  │
+│  - summary   │  │  - 向量化    │  │              │
+└──────────────┘  └──────────────┘  └──────────────┘
+         │                │                │
+         └────────────────┼────────────────┘
+                          ▼
+                ┌─────────────────┐
+                │  entries表 +    │
+                │  embeddings向量  │
+                │  （项目记忆库）  │
+                └─────────────────┘
+                          │
+                          ▼
+                ┌─────────────────┐
+                │  PM-agent的     │
+                │  项目知识图谱    │
+                └─────────────────┘
+```
+
+### 🛠️ 工具清单（可被任何Agent调用）
+
+| 工具 | 位置 | 接口类型 | 功能 |
+|------|------|----------|------|
+| **entries_ingest** | `ai_factory/integrations/entries_ingest.py` | Python API | 💾 纯入库通道 |
+| **entries_ingest_cli** | `ai_factory/integrations/entries_ingest_cli.py` | CLI | 💾 命令行入库 |
+| **import_project_sessions** | `scripts/import_project_sessions.py` | Python + CLI | 📥 LLM处理+入库 |
+| **import_single_session** | 同上（便利API） | Python API | 📥 导入单个session |
+| **import_all_sessions** | 同上（便利API） | Python API | 📥 批量导入 |
+| **search_entries** | `ai_factory/rag/entries_rag.py` | Python API | 🧠 RAG检索 |
+
+### 🔄 自举循环机制
+
+```
+PM-agent开发新功能
+       ↓
+调用 📥[1] import_project_sessions
+自动完成：
+  - 提取session内容
+  - LLM生成title/summary
+  - 注入project_code="pm-agent"
+  - 调用💾[2]入库
+  - 向量化
+       ↓
+调用 🧠 RAG 检索历史
+自动过滤：project_code="pm-agent"
+       ↓
+调用 💾[2] entries_ingest
+记录新决策
+       ↓
+项目知识沉淀（entries表）
+       ↓
+能力增强 → 更智能的PM-agent
+       ↓
+回到第一步（循环上升）
+```
+
+### 📊 关键指标
+
+| 指标 | 数值 | 说明 |
+|------|------|------|
+| **代码精简** | -86% | entries_ingest: 720→100行 |
+| **重复消除** | -67% | 向量化代码统一 |
+| **节点完成** | 3个 | [0]访问控制、[1]LLM处理、[2]入库 |
+| **工具打压** | 6个 | CLI和Python API标准化 |
+| **文档完整** | 15次 | 完整开发历程记录 |
+| **自举就绪** | ✅ | 可以用自己管理自己 |
+
+### 🎯 下一步工作方向
+
+1. **增强RAG能力**
+   - 添加更复杂的查询过滤
+   - 支持时间范围检索
+   - 实现记忆关联推荐
+
+2. **扩展Agent能力**
+   - 任务自动分解
+   - 风险自动识别
+   - 决策影响分析
+
+3. **完善协作机制**
+   - PM-clerk自动化
+   - 多Agent协作协议
+   - 项目间知识共享
+
+4. **自举验证**
+   - 使用PM-agent记录本次开发
+   - 验证记忆检索效果
+   - 优化工具调用流程
+
+### 📝 使用示例（自举开始）
+
+```bash
+# PM-agent记录本次开发会话
+python scripts/import_project_sessions.py \
+  --project pm-agent \
+  --operator pm-agent \
+  --batch-all
+
+# PM-agent查询历史决策
+python -c "
+from ai_factory.rag.entries_rag import search_entries
+results = search_entries('为什么采用策略模式', project_code='pm-agent')
+for r in results[:3]:
+    print(f'{r.title}: {r.summary_ai[:100]}...')
+"
+
+# PM-agent记录新决策
+python ai_factory/integrations/entries_ingest_cli.py \
+  --payload '{
+    "title": "采用自举式开发",
+    "summary_ai": "PM-agent具备自举能力，开始用自己管理自己",
+    "raw_text": "详细内容...",
+    "project_code": "pm-agent"
+  }'
+```
+
+### ✅ 里程碑状态
+
+**🎉 完成！PM-Agent最小MVP已就绪，开始自举进化！**
+
+---
+
+## 下一步开发计划（持续完善）
+
+### Phase 4: 能力增强（进行中）
+- [ ] RAG检索增强（时间过滤、关联推荐）
+- [ ] 任务自动分解
+- [ ] 风险自动识别
+
+### Phase 5: 多Agent协作（规划中）
+- [ ] PM-clerk自动化
+- [ ] 与其他专业Agent协作
+- [ ] 项目间知识共享机制
+
+### Phase 6: 自举验证（即将开始）
+- [ ] 使用PM-agent记录本次完整开发
+- [ ] 验证记忆检索准确性
+- [ ] 优化迭代
+
+---
+
 ### ✅ 验证命令
 
 ```bash
