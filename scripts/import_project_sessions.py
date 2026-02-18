@@ -454,48 +454,40 @@ class ProjectSessionImporter:
             return content[:60], content[:500]
 
     def _call_deepseek_for_qa_title_and_summary(self, user_question: str, assistant_answer: str) -> tuple[str, str]:
-        """调用DeepSeek API基于问答对生成title和summary
-        
-        title和summary应该总结整个问答对，而不仅仅是问题。
-        """
         import requests
         
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
             print("    ⚠️  DEEPSEEK_API_KEY未设置")
-            combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
-            return combined[:60], combined[:500]
+            fallback = assistant_answer or user_question
+            return fallback[:60], fallback[:500]
         
-        prompt = f"""请对以下问答对进行标题生成和内容总结。
+        raw_text = assistant_answer or ""
+        
+        if not raw_text.strip():
+            return "【未完成】AI未生成回答", "AI未生成回答"
+        
+        prompt = f"""下面是一条AI回答内容，请生成标题和摘要：
 
-重要：首先判断问答对的完整性和意义
-1. **正常问答**（AI提供了实质回答）：正常总结，摘要≤500字
-2. **测试性/无意义**：用户只是测试（如"测试一下"、"hello"等），标题加【测试】，摘要简短说明（≤30字）
-3. **未完成/无回答**：AI未回答、回答卡死、被手动中止、只有工具调用无实质回复等情况：
-   - 标题加【未完成】或【无回答】
-   - 摘要必须简短（≤50字），只说明未完成原因
-   - 禁止总结AI的思考过程或工具调用细节
-   - 示例："AI未生成回答"、"回答被中止"、"只有工具调用无最终结论"
+字段要求：
+1. title: 基于AI回答生成简洁清晰的中文标题（≤60字）
+   - 只能使用回答中已有的信息，不得凭空添加背景、项目名或结论
+   - 可适度归纳压缩，但不得引入回答未提及的具体人物、系统名称或实现细节
 
-处理原则：
-1. **标题**（≤60字）：去除口语化表达，提炼核心主题，专业通顺
-2. **摘要长度控制**：
-   - 正常问答：≤500字，完整覆盖关键结论
-   - 【测试】：≤30字
-   - 【未完成】/【无回答】：≤50字，禁止总结思考过程
-3. **去除口语垃圾**（"呃"、"那个"、"就是"等），优化语句结构
-4. **禁止添加原文没有的解读、分析框架或层级结构
+2. summary: 对AI回答进行完整的中文总结（300~600字，使用Markdown段落格式）
+   - 重点保留关键决策、问题、方案和TODO
+   - 不得加入回答未明确表达的推测性结论
 
-格式：
-标题：[标题内容]
-摘要：[摘要内容]
+特殊处理（通过在title前加标记区分）：
+- 如果AI回答只是简单问候/测试回复（如"好的"、"测试成功"）：title加【测试】前缀，summary简短说明（≤30字）
+- 如果AI回答不完整/被中断/只有思考过程无结论：title加【未完成】前缀，summary简短说明（≤50字）
 
-问答对原文：
-【用户问题】
-{user_question[:2000]}
+输出要求：
+- 只输出一个JSON对象，字段名固定为title和summary
+- 不要输出任何额外的解释文字或代码块标记
 
-【AI回答】
-{assistant_answer[:4000]}
+AI回答原文：
+{raw_text}
 """
         
         try:
@@ -505,56 +497,63 @@ class ProjectSessionImporter:
                 json={
                     "model": "deepseek-chat",
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 800
+                    "max_tokens": 1000
                 },
                 timeout=60
             )
             resp.raise_for_status()
             text = resp.json()["choices"][0]["message"]["content"]
             
-            # 解析结果 - 改进版，处理多行摘要
-            title = ""
-            summary = ""
-            in_summary = False
-            summary_lines = []
+            # 清理可能的markdown代码块标记
+            text = text.strip()
+            if text.startswith("```"):
+                lines = text.split("\n")
+                if len(lines) > 1:
+                    text = "\n".join(lines[1:-1] if lines[-1].startswith("```") else lines[1:])
+            text = text.strip()
             
-            for line in text.split("\n"):
-                line_stripped = line.strip()
+            # JSON解析
+            try:
+                result = json.loads(text)
+                title = result.get("title", "")
+                summary = result.get("summary", "")
+            except json.JSONDecodeError:
+                # 回退到旧的解析方式
+                title = ""
+                summary = ""
+                in_summary = False
+                summary_lines = []
                 
-                # 解析标题
-                if line_stripped.startswith("标题：") or line_stripped.startswith("标题:"):
-                    title = line_stripped[3:].strip() if line_stripped.startswith("标题：") else line_stripped[2:].strip()
-                    in_summary = False
-                # 检测摘要开始
-                elif line_stripped.startswith("摘要：") or line_stripped.startswith("摘要:"):
-                    # 检查同一行是否还有内容
-                    content = line_stripped[3:].strip() if line_stripped.startswith("摘要：") else line_stripped[2:].strip()
-                    if content:
-                        summary_lines.append(content)
-                    in_summary = True
-                # 如果在摘要区域，收集内容
-                elif in_summary and line_stripped:
-                    summary_lines.append(line_stripped)
+                for line in text.split("\n"):
+                    line_stripped = line.strip()
+                    
+                    if line_stripped.startswith("标题：") or line_stripped.startswith("标题:"):
+                        title = line_stripped[3:].strip() if line_stripped.startswith("标题：") else line_stripped[2:].strip()
+                        in_summary = False
+                    elif line_stripped.startswith("摘要：") or line_stripped.startswith("摘要:"):
+                        content = line_stripped[3:].strip() if line_stripped.startswith("摘要：") else line_stripped[2:].strip()
+                        if content:
+                            summary_lines.append(content)
+                        in_summary = True
+                    elif in_summary and line_stripped:
+                        summary_lines.append(line_stripped)
+                
+                summary = "\n".join(summary_lines)
             
-            summary = "\n".join(summary_lines)
-            
-            # 清理可能的引号
             title = title.strip('"\'')
             summary = summary.strip('"\'')
             
             if not title:
-                combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
-                title = combined[:60]
+                title = raw_text[:60]
             if not summary:
-                combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
-                summary = combined[:500]
+                summary = raw_text[:600]
             
             print(f"    📝 DeepSeek生成: title={title[:40]}...")
             return title, summary
         except Exception as e:
             print(f"    ⚠️  DeepSeek API失败: {e}")
-            combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
-            return combined[:60], combined[:500]
+            fallback = raw_text or user_question
+            return fallback[:60], fallback[:500]
 
     def import_session(self, session: Dict) -> bool:
         """📥 [1] 导入单个session，执行LLM处理后入库"""
