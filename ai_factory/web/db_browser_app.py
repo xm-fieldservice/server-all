@@ -100,6 +100,7 @@ def _get_entry_detail(entry_id: str) -> Optional[Dict[str, Any]]:
 
 
 def _render_detail_fragment(selected_detail: Dict[str, Any]) -> str:
+    import json
     key_fields = [
         "entry_id",
         "title",
@@ -120,26 +121,18 @@ def _render_detail_fragment(selected_detail: Dict[str, Any]) -> str:
 
     content_value = selected_detail.get("input_content" if "input_content" in selected_detail else "content")
 
-    memo_value = None
+    answer_text = ""
     if "answer_payload" in selected_detail:
         memo_value = selected_detail.get("answer_payload")
-    elif "memo" in selected_detail:
-        memo_value = selected_detail.get("memo")
-    answer_payload_html = ""
-    if memo_value is not None:
-        import json
-        try:
-            if isinstance(memo_value, str):
-                memo_value = json.loads(memo_value)
-            memo_formatted = json.dumps(memo_value, ensure_ascii=False, indent=2)
-        except Exception:
-            memo_formatted = str(memo_value)
-    else:
-        memo_formatted = "null"
-    answer_payload_html = f"""
-    <div class="detail-content-label">Answer Payload (JSON)：</div>
-    <pre id="detail-answer-payload" class="detail-content">{memo_formatted}</pre>
-    """
+        if memo_value and isinstance(memo_value, dict):
+            answer_text = memo_value.get("text", "")
+        elif memo_value and isinstance(memo_value, str):
+            import json
+            try:
+                parsed = json.loads(memo_value)
+                answer_text = parsed.get("text", "")
+            except:
+                pass
 
     extra_fields_parts: List[str] = []
     for k, v in selected_detail.items():
@@ -159,15 +152,18 @@ def _render_detail_fragment(selected_detail: Dict[str, Any]) -> str:
       {header}
     </div>
     <div class="detail-content-label">原文 input_content：</div>
-    <pre id="detail-content" class="detail-content">{content}</pre>
-    {memo}
+    <div id="detail-content" class="markdown-content"></div>
+    <script>document.getElementById('detail-content').innerHTML = marked.parse({content_json});</script>
+    <div class="detail-content-label">AI回答 (answer_payload.text)：</div>
+    <div id="detail-answer" class="markdown-content"></div>
+    <script>document.getElementById('detail-answer').innerHTML = marked.parse({answer_json});</script>
     <div class="detail-extra">
       {extra}
     </div>
     """.format(
         header="\n".join(detail_header_parts),
-        content="" if content_value is None else content_value,
-        memo=answer_payload_html,
+        content_json=json.dumps(content_value or ""),
+        answer_json=json.dumps(answer_text or ""),
         extra="\n".join(extra_fields_parts),
     )
 
@@ -453,7 +449,29 @@ def _render_page(
             padding: 4px 6px;
             font-size: 13px;
           }}
+          .markdown-content {{
+            background: #fafafa;
+            padding: 12px;
+            border-radius: 4px;
+            border: 1px solid #eee;
+            max-height: 500px;
+            overflow-y: auto;
+            font-size: 13px;
+            line-height: 1.6;
+          }}
+          .markdown-content h1 {{ font-size: 1.5em; margin: 0.5em 0; border-bottom: 1px solid #eee; }}
+          .markdown-content h2 {{ font-size: 1.3em; margin: 0.5em 0; }}
+          .markdown-content h3 {{ font-size: 1.1em; margin: 0.5em 0; }}
+          .markdown-content pre {{ background: #f5f5f5; padding: 8px; border-radius: 4px; overflow-x: auto; }}
+          .markdown-content code {{ background: #f5f5f5; padding: 2px 4px; border-radius: 2px; font-size: 0.9em; }}
+          .markdown-content pre code {{ background: none; padding: 0; }}
+          .markdown-content ul, .markdown-content ol {{ padding-left: 1.5em; }}
+          .markdown-content blockquote {{ border-left: 3px solid #ddd; padding-left: 1em; color: #666; }}
+          .markdown-content table {{ border-collapse: collapse; width: 100%; }}
+          .markdown-content th, .markdown-content td {{ border: 1px solid #ddd; padding: 6px 8px; }}
+          .markdown-content th {{ background: #f5f5f5; }}
         </style>
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
       </head>
       <body>
         <div class="app-header">

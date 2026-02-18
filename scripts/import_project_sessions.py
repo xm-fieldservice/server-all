@@ -227,22 +227,6 @@ class ProjectSessionImporter:
                     part_type = part.get("type", "")
                     if part_type == "text":
                         texts.append(part.get("text", ""))
-                    elif part_type == "tool_use":
-                        tool_name = part.get("name", "unknown")
-                        tool_input = part.get("input", {})
-                        texts.append(f"【工具调用: {tool_name}】")
-                        if isinstance(tool_input, dict) and tool_input:
-                            texts.append(json.dumps(tool_input, ensure_ascii=False, indent=2))
-                    elif part_type == "tool_result":
-                        content = part.get("content", "")
-                        if isinstance(content, str):
-                            texts.append(content[:500])
-                        else:
-                            texts.append(json.dumps(content, ensure_ascii=False, indent=2)[:500])
-                    elif part_type == "reasoning_content":
-                        texts.append(f"【思考内容】\n{part.get('text', '')}")
-                    elif part_type == "redacted_reasoning_content":
-                        texts.append("【思考内容-已编辑】")
                 
                 full_text = "\n".join(texts)
                 if full_text.strip():
@@ -309,21 +293,21 @@ class ProjectSessionImporter:
                     i += 1
                     continue
                 
-                # 查找紧跟其后的 assistant 消息
-                assistant_content = ""
-                if i + 1 < len(messages):
-                    next_msg = messages[i + 1]
-                    if next_msg.get("role") == "assistant":
-                        assistant_content = next_msg.get("_extracted_text", "")
-                        i += 2  # 跳过 assistant 消息
-                    else:
-                        i += 1
-                else:
-                    i += 1
+                assistant_contents = []
+                j = i + 1
+                while j < len(messages) and messages[j].get("role") == "assistant":
+                    assistant_text = messages[j].get("_extracted_text", "")
+                    if assistant_text:
+                        assistant_contents.append(assistant_text)
+                    j += 1
+                
+                assistant_content = "\n\n".join(assistant_contents) if assistant_contents else ""
+                
+                i = j
                 
                 qa_pairs.append({
-                    "user": user_content[:1000],
-                    "assistant": assistant_content[:5000] if assistant_content else None
+                    "user": user_content,
+                    "assistant": assistant_content if assistant_content else None
                 })
             else:
                 i += 1
@@ -374,39 +358,9 @@ class ProjectSessionImporter:
         return "\n".join(content_parts) if content_parts else "(empty session)"
 
     def generate_title_and_summary_from_qa(self, user_question: str, assistant_answer: str) -> tuple[str, str]:
-        """基于问答对整体生成title和summary
-        
-        title和summary_ai应该总结整个问答对的内容，而不是只基于问题。
-        
-        Args:
-            user_question: 用户问题
-            assistant_answer: 助手回答（可能为None）
-            
-        Returns:
-            tuple: (title, summary)
-            title: 不少于30字（除非内容本身很短）
-            summary: 300-500字（除非内容本身很少）
-        """
-        # 组合问答内容
-        combined_content = f"问题：{user_question}\n\n"
-        if assistant_answer:
-            combined_content += f"回答：{assistant_answer}"
-        else:
-            combined_content += "回答：（无）"
-        
-        # 调用DeepSeek API生成title和summary
         title, summary = self._call_deepseek_for_qa_title_and_summary(
             user_question, assistant_answer or "（无回答）"
         )
-        
-        # 确保最小长度（如果内容允许）
-        if len(user_question) + len(assistant_answer or "") > 100:
-            if len(title) < 30:
-                print(f"    ⚠️  Title太短({len(title)}字)，使用原文补充")
-                title = user_question[:min(50, len(user_question))]
-            if len(summary) < 300:
-                print(f"    ⚠️  Summary太短({len(summary)}字)，使用原文补充")
-                summary = combined_content[:min(500, len(combined_content))]
         
         return title, summary
 
@@ -512,22 +466,36 @@ class ProjectSessionImporter:
             combined = f"问题：{user_question}\n\n回答：{assistant_answer}"
             return combined[:60], combined[:500]
         
-        prompt = f"""基于以下问答对，生成标题和内容摘要。
+        prompt = f"""请对以下问答对进行标题生成和内容总结。
 
-要求：
-1. 标题（≥30字，≤60字）：概括问答对的核心主题和关键结论
-2. 摘要（≥300字，≤500字）：总结用户问题的核心诉求和AI回答的关键要点，突出价值收获
+重要：首先判断问答对的完整性和意义
+1. **正常问答**（AI提供了实质回答）：正常总结，摘要≤500字
+2. **测试性/无意义**：用户只是测试（如"测试一下"、"hello"等），标题加【测试】，摘要简短说明（≤30字）
+3. **未完成/无回答**：AI未回答、回答卡死、被手动中止、只有工具调用无实质回复等情况：
+   - 标题加【未完成】或【无回答】
+   - 摘要必须简短（≤50字），只说明未完成原因
+   - 禁止总结AI的思考过程或工具调用细节
+   - 示例："AI未生成回答"、"回答被中止"、"只有工具调用无最终结论"
 
-格式要求：
+处理原则：
+1. **标题**（≤60字）：去除口语化表达，提炼核心主题，专业通顺
+2. **摘要长度控制**：
+   - 正常问答：≤500字，完整覆盖关键结论
+   - 【测试】：≤30字
+   - 【未完成】/【无回答】：≤50字，禁止总结思考过程
+3. **去除口语垃圾**（"呃"、"那个"、"就是"等），优化语句结构
+4. **禁止添加原文没有的解读、分析框架或层级结构
+
+格式：
 标题：[标题内容]
 摘要：[摘要内容]
 
-问答对：
+问答对原文：
 【用户问题】
-{user_question[:1500]}
+{user_question[:2000]}
 
 【AI回答】
-{assistant_answer[:2500]}
+{assistant_answer[:4000]}
 """
         
         try:
