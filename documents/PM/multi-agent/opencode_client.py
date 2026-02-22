@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, List
 class OpenCodeClient:
     """OpenCode HTTP API 客户端"""
 
-    def __init__(self, base_url: str = "http://localhost:4096", timeout: int = 300):
+    def __init__(self, base_url: str = "http://localhost:4096", timeout: int = 500):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.session_id: Optional[str] = None
@@ -66,9 +66,15 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def call(self, message: str, title: Optional[str] = None) -> Dict[str, Any]:
-        """便捷方法：创建 session 并发送消息"""
-        session_info = self.create_session(title=title)
+    def call(self, message: str, title: Optional[str] = None, new_session: bool = True) -> Dict[str, Any]:
+        """便捷方法：发送消息
+        new_session: 是否创建新 session，为 False 时使用已有 session
+        """
+        if new_session or not self.session_id:
+            session_info = self.create_session(title=title)
+        else:
+            session_info = {"id": self.session_id}
+        
         sid = session_info["id"]
 
         result = self.send_message(message, session_id=sid)
@@ -92,6 +98,33 @@ class OpenCodeClient:
                     if part.get("type") == "text":
                         return part.get("text", "")
         return ""
+
+    def list_sessions(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """获取 session 列表"""
+        url = f"{self.base_url}/session"
+        params = {"limit": limit}
+
+        resp = requests.get(url, params=params, timeout=self.timeout)
+        resp.raise_for_status()
+        return resp.json()
+
+    def use_session(self, session_id: str) -> None:
+        """使用已存在的 session"""
+        self.session_id = session_id
+
+    def get_current_session(self) -> Optional[str]:
+        """获取当前 session ID"""
+        return self.session_id
+
+    def has_session(self) -> bool:
+        """检查是否有活动的 session"""
+        return self.session_id is not None
+
+    def delete_session(self, session_id: str) -> bool:
+        url = f"{self.base_url}/session/{session_id}"
+        resp = requests.delete(url, timeout=self.timeout)
+        resp.raise_for_status()
+        return True
 
 
 def create_opencode_client() -> OpenCodeClient:

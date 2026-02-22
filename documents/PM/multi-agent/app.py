@@ -34,11 +34,38 @@ def chat():
     """处理用户对话请求"""
     data = request.get_json()
     user_message = data.get("message", "").strip()
+    directory = data.get("directory", "/root/ai-factory")
+    session_id = data.get("session_id")
+    new_session = data.get("new_session", True)
 
     if not user_message:
         return jsonify({
             "success": False,
             "error": "消息不能为空"
+        })
+
+    try:
+        agent = get_agent_a()
+        
+        if session_id and not new_session:
+            agent.opencode_client.use_session(session_id)
+        
+        result = agent.execute(user_message, directory=directory, new_session=new_session)
+
+        return jsonify({
+            "success": True,
+            "session_id": result.get("session_id", ""),
+            "user_input": result["user_input"],
+            "refined_input": result["refined_input"],
+            "result": result["agent_b_result"],
+            "duration": f"{result['duration_seconds']:.1f}秒",
+            "timestamp": result["timestamp"]
+        })
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
         })
 
     try:
@@ -86,6 +113,92 @@ def health():
         "status": "ok",
         "agent_a": "ready" if agent_a else "not_initialized"
     })
+
+
+@app.route("/api/session", methods=["GET"])
+def get_session():
+    """获取当前 session 状态"""
+    try:
+        agent = get_agent_a()
+        session_id = agent.get_current_session_id()
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "has_session": session_id is not None
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@app.route("/api/new_session", methods=["POST"])
+def new_session():
+    """创建新 session"""
+    try:
+        agent = get_agent_a()
+        agent.opencode_client.create_session(title="New Multi-Agent Session")
+        session_id = agent.get_current_session_id()
+        return jsonify({
+            "success": True,
+            "session_id": session_id
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@app.route("/api/sessions", methods=["GET"])
+def list_sessions():
+    """获取 session 列表"""
+    try:
+        agent = get_agent_a()
+        sessions = agent.opencode_client.list_sessions(limit=50)
+        return jsonify({
+            "success": True,
+            "sessions": sessions
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@app.route("/api/session/<session_id>", methods=["DELETE"])
+def delete_session(session_id):
+    """删除 session"""
+    try:
+        agent = get_agent_a()
+        agent.opencode_client.delete_session(session_id)
+        return jsonify({
+            "success": True
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+@app.route("/api/session/<session_id>/messages", methods=["GET"])
+def get_session_messages(session_id):
+    """获取 session 消息内容"""
+    try:
+        agent = get_agent_a()
+        messages = agent.opencode_client.get_messages(session_id=session_id, limit=100)
+        return jsonify({
+            "success": True,
+            "messages": messages
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 
 
 if __name__ == "__main__":
