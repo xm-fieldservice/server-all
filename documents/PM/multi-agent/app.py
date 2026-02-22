@@ -29,11 +29,14 @@ def index():
     return render_template("index.html")
 
 
-@app.route("/api/chat", methods=["POST"])
+@app.route("/qa/api/chat", methods=["POST"])
 def chat():
     """处理用户对话请求"""
     data = request.get_json()
     user_message = data.get("message", "").strip()
+    directory = data.get("directory", "/root/ai-factory")
+    session_id = data.get("session_id")
+    new_session = data.get("new_session", True)
 
     if not user_message:
         return jsonify({
@@ -43,7 +46,12 @@ def chat():
 
     try:
         agent = get_agent_a()
-        result = agent.execute(user_message)
+        
+        # 如果传入了 session_id 且不创建新 session，则复用已有 session
+        if session_id and not new_session:
+            agent.opencode_client.use_session(session_id)
+        
+        result = agent.execute(user_message, directory=directory, new_session=new_session)
 
         return jsonify({
             "success": True,
@@ -62,7 +70,7 @@ def chat():
         })
 
 
-@app.route("/api/history", methods=["GET"])
+@app.route("/qa/api/history", methods=["GET"])
 def history():
     """获取对话历史"""
     try:
@@ -79,7 +87,7 @@ def history():
         })
 
 
-@app.route("/api/health", methods=["GET"])
+@app.route("/qa/api/health", methods=["GET"])
 def health():
     """健康检查"""
     return jsonify({
@@ -88,11 +96,48 @@ def health():
     })
 
 
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    debug = os.getenv("FLASK_DEBUG", "true").lower() == "true"
+@app.route("/qa/api/session", methods=["GET"])
+def get_session():
+    """获取当前 session 状态"""
+    try:
+        agent = get_agent_a()
+        session_id = agent.get_current_session_id()
+        return jsonify({
+            "success": True,
+            "session_id": session_id,
+            "has_session": session_id is not None
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
 
-    print(f"启动 Multi-Agent MVP 服务: http://localhost:{port}")
+
+@app.route("/qa/api/new_session", methods=["POST"])
+def new_session():
+    """创建新 session"""
+    try:
+        agent = get_agent_a()
+        # 通过调用 create_session 创建新 session
+        agent.opencode_client.create_session(title="New Multi-Agent Session")
+        session_id = agent.get_current_session_id()
+        return jsonify({
+            "success": True,
+            "session_id": session_id
+        })
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        })
+
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 7480))
+    debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
+
+    print(f"启动 Multi-Agent MVP 服务: http://47.92.174.170:{port}")
     print(f"OpenCode URL: {os.getenv('OPENCODE_URL', 'http://localhost:4096')}")
     print(f"请确保 OpenCode Server 已启动!")
 

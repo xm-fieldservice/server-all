@@ -197,6 +197,83 @@
         .status-indicator.offline {
             background: #dc3545;
         }
+
+        .project-selector {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+
+        .project-selector label {
+            font-size: 14px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        .project-selector select {
+            flex: 1;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+        }
+
+        .project-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .current-dir {
+            font-size: 12px;
+            color: #666;
+            margin-left: 10px;
+        }
+
+        .session-info {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #f0f4ff;
+            border-radius: 8px;
+        }
+
+        .session-info .label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .session-info .session-id {
+            font-family: monospace;
+            font-size: 12px;
+            color: #667eea;
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            max-width: 150px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .new-session-btn {
+            padding: 6px 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        .new-session-btn:hover {
+            background: #5a6fd6;
+        }
     </style>
 </head>
 <body>
@@ -208,6 +285,22 @@
 
         <div class="main-card">
             <div class="chat-section">
+                <div class="project-selector">
+                    <label>📁 项目目录：</label>
+                    <select id="projectSelect" onchange="changeProject()">
+                        <option value="/root/ai-factory/documents/PM">PM 项目</option>
+                        <option value="/root">根目录</option>
+                        <option value="/root/ai-factory">AI Factory</option>
+                    </select>
+                    <span class="current-dir" id="currentDir">当前: PM 项目</span>
+                </div>
+
+                <div class="session-info">
+                    <span class="label">Session:</span>
+                    <span class="session-id" id="sessionId">未创建</span>
+                    <button class="new-session-btn" onclick="createNewSession()">+ New Session</button>
+                </div>
+
                 <div class="input-group">
                     <input 
                         type="text" 
@@ -261,9 +354,64 @@
     </div>
 
     <script>
+        // 当前选中的项目目录
+        let currentProject = '/root/ai-factory/documents/PM';
+        let currentSessionId = null;
+        let forceNewSession = false;  // 是否强制创建新 session
+
+        const projectNames = {
+            '/root/ai-factory/documents/PM': 'PM 项目',
+            '/root': '根目录',
+            '/root/ai-factory': 'AI Factory'
+        };
+
+        async function createNewSession() {
+            forceNewSession = true;  // 标记需要创建新 session
+            try {
+                const resp = await fetch('/qa/api/new_session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const data = await resp.json();
+                if (data.success) {
+                    currentSessionId = data.session_id;
+                    document.getElementById('sessionId').textContent = data.session_id || '已创建';
+                    document.getElementById('resultBox').innerHTML = '<span class="loading">新 session 已创建，请输入问题...</span>';
+                    forceNewSession = false;  // 重置标记
+                } else {
+                    alert('创建新 session 失败: ' + data.error);
+                    forceNewSession = false;
+                }
+            } catch (e) {
+                alert('创建新 session 失败: ' + e.message);
+                forceNewSession = false;
+            }
+        }
+
+        async function checkSession() {
+            try {
+                const resp = await fetch('/qa/api/session');
+                const data = await resp.json();
+                if (data.success && data.session_id) {
+                    currentSessionId = data.session_id;
+                    document.getElementById('sessionId').textContent = data.session_id;
+                } else {
+                    document.getElementById('sessionId').textContent = '未创建';
+                }
+            } catch (e) {
+                console.log('检查 session 失败:', e);
+            }
+        }
+
+        function changeProject() {
+            const select = document.getElementById('projectSelect');
+            currentProject = select.value;
+            document.getElementById('currentDir').textContent = '当前: ' + projectNames[currentProject];
+        }
+
         async function checkHealth() {
             try {
-                const resp = await fetch('/api/health');
+                const resp = await fetch('/qa/api/health');
                 const data = await resp.json();
                 const indicator = document.getElementById('statusIndicator');
                 const text = document.getElementById('statusText');
@@ -296,6 +444,9 @@
             const message = input.value.trim();
             if (!message) return;
 
+            // 清空输入框
+            input.value = '';
+
             // UI 状态：加载中
             btn.disabled = true;
             btn.textContent = '处理中...';
@@ -307,15 +458,35 @@
             document.getElementById('step3').textContent = '等待 Agent B 响应...';
 
             try {
-                const resp = await fetch('/api/chat', {
+                // 决定是否创建新 session：
+                // 1. 如果点击了 "New Session" 按钮 (forceNewSession=true)，创建新 session
+                // 2. 否则，如果当前没有 session，也创建新 session
+                // 3. 否则，复用已有 session
+                const shouldCreateNew = forceNewSession || !currentSessionId;
+                
+                const resp = await fetch('/qa/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message })
+                    body: JSON.stringify({ 
+                        message,
+                        directory: currentProject,
+                        session_id: currentSessionId,
+                        new_session: shouldCreateNew
+                    })
                 });
 
                 const data = await resp.json();
 
                 if (data.success) {
+                    // 更新 session_id
+                    if (data.session_id) {
+                        currentSessionId = data.session_id;
+                        document.getElementById('sessionId').textContent = data.session_id;
+                    }
+                    
+                    // 重置强制创建新 session 标记
+                    forceNewSession = false;
+                    
                     document.getElementById('step2').textContent = data.refined_input;
                     document.getElementById('step3').textContent = data.result.substring(0, 200) + (data.result.length > 200 ? '...' : '');
                     
@@ -336,6 +507,7 @@
 
         // 页面加载时检查状态
         checkHealth();
+        checkSession();
         setInterval(checkHealth, 30000);
     </script>
 </body>

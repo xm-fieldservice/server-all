@@ -25,6 +25,18 @@ class OpenCodeClient:
         self.session_id = data["id"]
         return data
 
+    def use_session(self, session_id: str) -> None:
+        """使用已存在的 session"""
+        self.session_id = session_id
+
+    def get_current_session(self) -> Optional[str]:
+        """获取当前 session ID"""
+        return self.session_id
+
+    def has_session(self) -> bool:
+        """检查是否有活动的 session"""
+        return self.session_id is not None
+
     def send_message(self, message: str, session_id: Optional[str] = None) -> Dict[str, Any]:
         """发送消息并等待响应"""
         sid = session_id or self.session_id
@@ -66,9 +78,15 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def call(self, message: str, title: Optional[str] = None) -> Dict[str, Any]:
-        """便捷方法：创建 session 并发送消息"""
-        session_info = self.create_session(title=title)
+    def call(self, message: str, title: Optional[str] = None, new_session: bool = True) -> Dict[str, Any]:
+        """便捷方法：发送消息
+        new_session: 是否创建新 session，为 False 时使用已有 session
+        """
+        if new_session or not self.session_id:
+            session_info = self.create_session(title=title)
+        else:
+            session_info = {"id": self.session_id}
+        
         sid = session_info["id"]
 
         result = self.send_message(message, session_id=sid)

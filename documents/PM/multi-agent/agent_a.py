@@ -22,6 +22,7 @@ class AgentA:
     ):
         self.opencode_client = create_opencode_client()
         self.md_writer = create_md_writer(md_file_path)
+        self.current_session_id: Optional[str] = None
 
     def refine_instruction(self, user_input: str) -> str:
         """使用 Agent A 梳理指令（通过简单规则）"""
@@ -49,8 +50,10 @@ class AgentA:
 
         return refined
 
-    def execute(self, user_input: str) -> dict:
-        """执行完整流程：用户输入 → 梳理 → 调用 B → 写 MD"""
+    def execute(self, user_input: str, directory: str = "/root/ai-factory/documents/PM", new_session: bool = True) -> dict:
+        """执行完整流程：用户输入 → 梳理 → 调用 B → 写 MD
+        new_session: 是否创建新 session，False 时复用已有 session
+        """
         start_time = time.time()
 
         # Step 1: 梳理指令
@@ -60,13 +63,17 @@ class AgentA:
             print(f"LLM 梳理失败，使用简单规则: {e}")
             refined_input = self.refine_instruction_simple(user_input)
 
-        # Step 2: 调用 Agent B (OpenCode)
+        # Step 2: 调用 Agent B (OpenCode)，带上 cd 指令切换目录
         session_id = ""
         try:
+            # 在消息前加上 cd 指令切换到指定目录
+            full_message = f"cd {directory} && {refined_input}"
             result = self.opencode_client.call(
-                message=refined_input,
-                title=f"User: {user_input[:30]}"
+                message=full_message,
+                title=f"User: {user_input[:30]}",
+                new_session=new_session
             )
+            self.current_session_id = result["session_id"]
             agent_b_result = self.opencode_client.get_last_response_text(
                 session_id=result["session_id"]
             )
@@ -82,7 +89,8 @@ class AgentA:
             user_input=user_input,
             refined_input=refined_input,
             agent_b_result=agent_b_result,
-            duration_seconds=duration
+            duration_seconds=duration,
+            session_id=session_id
         )
 
         return {
@@ -94,6 +102,10 @@ class AgentA:
             "timestamp": timestamp,
             "session_id": session_id
         }
+
+    def get_current_session_id(self) -> Optional[str]:
+        """获取当前 session ID"""
+        return self.current_session_id
 
 
 def create_agent_a(

@@ -32,7 +32,8 @@ class MDWriter:
         user_input: str,
         refined_input: str,
         agent_b_result: str,
-        duration_seconds: Optional[float] = None
+        duration_seconds: Optional[float] = None,
+        session_id: Optional[str] = None
     ) -> str:
         """追加对话记录"""
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -41,6 +42,10 @@ class MDWriter:
         duration_str = ""
         if duration_seconds is not None:
             duration_str = f"**执行时长**: {duration_seconds:.1f} 秒\n"
+
+        session_str = ""
+        if session_id:
+            session_str = f"**Session ID**: {session_id}\n"
 
         entry = f"""## {date_only} {datetime.now().strftime("%H:%M:%S")}
 
@@ -59,7 +64,7 @@ class MDWriter:
 {agent_b_result}
 ```
 
-{duration_str}---
+{session_str}{duration_str}---
 """
 
         with open(self.file_path, "a", encoding="utf-8") as f:
