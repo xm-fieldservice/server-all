@@ -49,7 +49,7 @@ class AgentA:
 
         return refined
 
-    def execute(self, user_input: str) -> dict:
+    def execute(self, user_input: str, directory: str = "/root/ai-factory/documents/PM", new_session: bool = True) -> dict:
         """执行完整流程：用户输入 → 梳理 → 调用 B → 写 MD"""
         start_time = time.time()
 
@@ -60,12 +60,14 @@ class AgentA:
             print(f"LLM 梳理失败，使用简单规则: {e}")
             refined_input = self.refine_instruction_simple(user_input)
 
-        # Step 2: 调用 Agent B (OpenCode)
+        # Step 2: 调用 Agent B (OpenCode)，带上 cd 指令切换目录
         session_id = ""
         try:
+            full_message = f"cd {directory} && {refined_input}"
             result = self.opencode_client.call(
-                message=refined_input,
-                title=f"User: {user_input[:30]}"
+                message=full_message,
+                title=f"User: {user_input[:30]}",
+                new_session=new_session
             )
             agent_b_result = self.opencode_client.get_last_response_text(
                 session_id=result["session_id"]
