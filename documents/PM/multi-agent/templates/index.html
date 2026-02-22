@@ -5,552 +5,338 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Multi-Agent 问答系统</title>
     <style>
-        :root {
-            --bg-sidebar: #ffffff;
-            --bg-main: #ffffff;
-            --border-color: #e5e7eb;
-            --text-primary: #111827;
-            --text-secondary: #6b7280;
-            --accent-color: #7c3aed;
-            --danger-color: #ef4444;
-            --hover-bg: #f3f4f6;
-            --session-w: 280px;
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            font-size: 13px;
-            color: var(--text-primary);
-            background: #f3f4f6;
-            height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+        }
+
+        .main-card {
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
             overflow: hidden;
         }
 
-        .layout {
-            display: grid;
-            grid-template-columns: var(--session-w) 1fr;
-            height: 100vh;
-            background: var(--bg-main);
+        .chat-section {
+            padding: 30px;
         }
 
-        .sessions {
-            background: var(--bg-sidebar);
-            border-right: 1px solid var(--border-color);
+        .input-group {
             display: flex;
-            flex-direction: column;
-            min-height: 0;
+            gap: 15px;
+            margin-bottom: 20px;
         }
 
-        .sessions-header { 
-            padding: 16px; 
-            border-bottom: 1px solid var(--border-color); 
+        .input-group input {
+            flex: 1;
+            padding: 15px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: border-color 0.3s;
         }
-        .project-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
-        .project-path { font-size: 11px; color: var(--text-secondary); margin-bottom: 12px; }
 
-        .btn-new-chat {
-            width: 100%;
-            padding: 8px;
-            background: #fff;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-            margin-bottom: 12px;
-        }
-        .btn-new-chat:hover { background: var(--hover-bg); }
-
-        .search-input {
-            width: 100%;
-            padding: 6px 10px;
-            border: 1px solid var(--border-color);
-            border-radius: 6px;
-            font-size: 12px;
+        .input-group input:focus {
             outline: none;
+            border-color: #667eea;
         }
-        .search-input:focus { border-color: var(--accent-color); }
 
-        .session-list { flex: 1; overflow-y: auto; min-height: 0; }
-
-        .session-item {
-            padding: 12px 16px;
-            cursor: pointer;
-            border-left: 2px solid transparent;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .session-item:hover { background: var(--hover-bg); }
-        .session-item.active { background: #f3f4f6; border-left-color: var(--accent-color); }
-        
-        .session-info { flex: 1; overflow: hidden; }
-        .session-name { font-weight: 500; margin-bottom: 4px; line-height: 1.4; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .session-meta { font-size: 11px; display: flex; justify-content: space-between; color: var(--text-secondary); }
-        
-        .btn-delete {
-            opacity: 0;
-            padding: 4px 8px;
-            background: var(--danger-color);
-            color: #fff;
+        .input-group button {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
             border: none;
-            border-radius: 4px;
-            font-size: 10px;
-            cursor: pointer;
-            margin-left: 8px;
-        }
-        .session-item:hover .btn-delete { opacity: 1; }
-        .btn-delete:hover { background: #dc2626; }
-
-        .chat {
-            display: flex;
-            flex-direction: column;
-            background: var(--bg-main);
-            min-height: 0;
-        }
-
-        .chat-header {
-            padding: 12px 16px;
-            border-bottom: 1px solid var(--border-color);
+            border-radius: 12px;
+            font-size: 16px;
             font-weight: 600;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-shrink: 0;
-        }
-        
-        .chat-header-right {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        
-        .current-session-id {
-            font-family: monospace;
-            font-size: 11px;
-            color: var(--text-secondary);
-            background: var(--hover-bg);
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-
-        .messages { 
-            flex: 1; 
-            overflow-y: auto; 
-            padding: 20px; 
-            display: flex; 
-            flex-direction: column; 
-            gap: 16px; 
-            min-height: 0;
-        }
-
-        .message { max-width: 90%; }
-
-        .msg-user {
-            align-self: flex-start;
-            background: #f9fafb;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            font-size: 13px;
-            line-height: 1.5;
-        }
-
-        .msg-ai { align-self: flex-start; }
-        .msg-ai p { margin-bottom: 8px; line-height: 1.5; }
-        
-        .msg-time {
-            font-size: 11px;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-
-        .input-box { 
-            padding: 16px; 
-            border-top: 1px solid var(--border-color); 
-            background: #fff;
-            flex-shrink: 0;
-        }
-        
-        .input-container { 
-            border: 1px solid var(--border-color); 
-            border-radius: 8px; 
-            padding: 12px; 
-            background: #fff;
-        }
-        
-        .input-textarea { 
-            width: 100%; 
-            border: none; 
-            resize: none; 
-            outline: none; 
-            font-family: inherit; 
-            font-size: 13px; 
-            min-height: 40px; 
-        }
-        
-        .input-toolbar { 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            margin-top: 8px; 
-        }
-        
-        .project-selector { 
-            display: flex; 
-            align-items: center; 
-            gap: 8px; 
-            font-size: 12px; 
-            color: var(--text-secondary); 
-        }
-        
-        .project-selector select {
-            padding: 4px 8px;
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            font-size: 12px;
-            background: #fff;
-        }
-
-        .btn-send {
-            background: var(--accent-color);
-            color: #fff;
-            padding: 6px 16px;
-            border: none;
-            border-radius: 6px;
-            font-size: 12px;
             cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
         }
-        .btn-send:hover { background: #6d28d9; }
-        .btn-send:disabled { opacity: 0.6; cursor: not-allowed; }
 
-        .btn-stop {
-            background: var(--danger-color);
-            color: #fff;
-            padding: 6px 16px;
-            border: none;
-            border-radius: 6px;
-            font-size: 12px;
-            cursor: pointer;
+        .input-group button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .input-group button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .result-section {
+            border-top: 1px solid #e0e0e0;
+            padding-top: 20px;
+        }
+
+        .result-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .result-box {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            min-height: 100px;
+        }
+
+        .result-box .loading {
+            color: #666;
+            font-style: italic;
+        }
+
+        .result-box .success {
+            color: #28a745;
+        }
+
+        .result-box .error {
+            color: #dc3545;
+        }
+
+        .process-steps {
+            margin-top: 20px;
             display: none;
         }
-        .btn-stop:hover { background: #dc2626; }
 
-        .empty-state {
-            flex: 1;
+        .process-steps.show {
+            display: block;
+        }
+
+        .step {
+            display: flex;
+            align-items: flex-start;
+            margin-bottom: 15px;
+            padding: 12px;
+            background: #f0f0f0;
+            border-radius: 8px;
+        }
+
+        .step-number {
+            width: 24px;
+            height: 24px;
+            background: #667eea;
+            color: white;
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: var(--text-secondary);
-            font-size: 14px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 12px;
+            flex-shrink: 0;
         }
 
-        ::-webkit-scrollbar { width: 6px; height: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 10px; }
+        .step-content {
+            flex: 1;
+        }
+
+        .step-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 4px;
+        }
+
+        .step-text {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .status-bar {
+            padding: 15px 30px;
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 8px;
+        }
+
+        .status-indicator.online {
+            background: #28a745;
+        }
+
+        .status-indicator.offline {
+            background: #dc3545;
+        }
     </style>
 </head>
 <body>
-    <div class="layout">
-        <aside class="sessions">
-            <div class="sessions-header">
-                <div class="project-title">Multi-Agent</div>
-                <div class="project-path">Agent A → Agent B</div>
-                <button class="btn-new-chat" onclick="createNewSession()">+ 新建会话</button>
-                <input type="text" class="search-input" placeholder="搜索会话..." id="searchInput">
-            </div>
-            <div class="session-list" id="sessionList">
-                <div style="padding: 20px; text-align: center; color: var(--text-secondary);">加载中...</div>
-            </div>
-        </aside>
+    <div class="container">
+        <div class="header">
+            <h1>🤖 Multi-Agent 问答系统</h1>
+            <p>Agent A (AutoGen) → Agent B (OpenCode)</p>
+        </div>
 
-        <main class="chat">
-            <div class="chat-header">
-                <span>会话详情</span>
-                <div class="chat-header-right">
-                    <span class="current-session-id" id="sessionIdDisplay">未选择</span>
+        <div class="main-card">
+            <div class="chat-section">
+                <div class="input-group">
+                    <input 
+                        type="text" 
+                        id="userInput" 
+                        placeholder="请输入您的指令..."
+                        onkeypress="handleKeyPress(event)"
+                    >
+                    <button id="submitBtn" onclick="submitMessage()">发送</button>
                 </div>
-            </div>
-            
-            <div class="messages" id="messages">
-                <div class="empty-state">选择一个会话或创建新会话开始对话</div>
-            </div>
 
-            <div class="input-box">
-                <div class="input-container">
-                    <textarea class="input-textarea" id="userInput" placeholder="输入指令..." onkeydown="handleKeyPress(event)"></textarea>
-                    <div class="input-toolbar">
-                        <div class="project-selector">
-                            <span>目录:</span>
-                            <select id="projectSelect" onchange="changeProject()">
-                                <option value="/root/ai-factory/documents/PM">PM 项目</option>
-                                <option value="/root">根目录</option>
-                                <option value="/root/ai-factory">AI Factory</option>
-                            </select>
+                <div class="process-steps" id="processSteps">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <div class="step-content">
+                            <div class="step-label">用户原始输入</div>
+                            <div class="step-text" id="step1">-</div>
                         </div>
-                        <div>
-                            <button class="btn-stop" id="stopBtn" onclick="stopRequest()">停止</button>
-                            <button class="btn-send" id="sendBtn" onclick="submitMessage()">发送</button>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <div class="step-content">
+                            <div class="step-label">Agent A 梳理后</div>
+                            <div class="step-text" id="step2">-</div>
+                        </div>
+                    </div>
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <div class="step-content">
+                            <div class="step-label">Agent B 返回结果</div>
+                            <div class="step-text" id="step3">-</div>
                         </div>
                     </div>
                 </div>
+
+                <div class="result-section">
+                    <h3>返回结果</h3>
+                    <div class="result-box" id="resultBox">
+                        <span class="loading">请输入指令开始对话...</span>
+                    </div>
+                </div>
             </div>
-        </main>
+
+            <div class="status-bar">
+                <div>
+                    <span class="status-indicator" id="statusIndicator"></span>
+                    <span id="statusText">检查状态...</span>
+                </div>
+                <div id="lastTime"></div>
+            </div>
+        </div>
     </div>
 
     <script>
-        let currentSessionId = null;
-        let currentProject = '/root/ai-factory/documents/PM';
-        let isProcessing = false;
-        let abortController = null;
-
-        async function loadSessions() {
+        async function checkHealth() {
             try {
-                const resp = await fetch('/api/sessions');
+                const resp = await fetch('/api/health');
                 const data = await resp.json();
-                const listEl = document.getElementById('sessionList');
-                const searchTerm = document.getElementById('searchInput').value.toLowerCase();
+                const indicator = document.getElementById('statusIndicator');
+                const text = document.getElementById('statusText');
                 
-                if (data.success && data.sessions && data.sessions.length > 0) {
-                    let filtered = data.sessions;
-                    if (searchTerm) {
-                        filtered = data.sessions.filter(s => 
-                            (s.title || '').toLowerCase().includes(searchTerm)
-                        );
-                    }
-                    
-                    if (filtered.length === 0) {
-                        listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">无匹配会话</div>';
-                        return;
-                    }
-                    
-                    listEl.innerHTML = filtered.map(session => `
-                        <div class="session-item ${session.id === currentSessionId ? 'active' : ''}" 
-                             onclick="selectSession('${session.id}')">
-                            <div class="session-info">
-                                <div class="session-name">${session.title || 'Untitled'}</div>
-                                <div class="session-meta">
-                                    <span>${formatTime(session.updated_at)}</span>
-                                </div>
-                            </div>
-                            <button class="btn-delete" onclick="event.stopPropagation(); deleteSession('${session.id}')">删除</button>
-                        </div>
-                    `).join('');
+                if (data.status === 'ok') {
+                    indicator.className = 'status-indicator online';
+                    text.textContent = '服务正常';
                 } else {
-                    listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">暂无会话</div>';
+                    indicator.className = 'status-indicator offline';
+                    text.textContent = '服务异常';
                 }
             } catch (e) {
-                console.error('加载失败:', e);
-                document.getElementById('sessionList').innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">加载失败</div>';
+                document.getElementById('statusIndicator').className = 'status-indicator offline';
+                document.getElementById('statusText').textContent = '连接失败';
             }
-        }
-
-        function formatTime(timestamp) {
-            if (!timestamp) return '';
-            const date = new Date(timestamp * 1000);
-            return date.toLocaleString('zh-CN', { 
-                month: 'numeric', 
-                day: 'numeric', 
-                hour: '2-digit', 
-                minute: '2-digit' 
-            });
-        }
-
-        async function selectSession(sessionId) {
-            currentSessionId = sessionId;
-            document.getElementById('sessionIdDisplay').textContent = sessionId.substring(0, 12);
-            await loadSessions();
-            await loadSessionMessages(sessionId);
-        }
-
-        async function loadSessionMessages(sessionId) {
-            try {
-                const resp = await fetch(`/api/session/${sessionId}/messages`);
-                const data = await resp.json();
-                const messagesEl = document.getElementById('messages');
-                
-                if (data.success && data.messages && data.messages.length > 0) {
-                    messagesEl.innerHTML = data.messages.map(msg => {
-                        const role = msg.info?.role || 'unknown';
-                        const isUser = role === 'user';
-                        const time = formatTime(msg.info?.created_at);
-                        
-                        let content = '';
-                        if (msg.parts && msg.parts.length > 0) {
-                            content = msg.parts.map(part => {
-                                if (part.type === 'text') {
-                                    return part.text;
-                                } else if (part.type === 'tool_use') {
-                                    return `<div style="background: #f0f0f0; padding: 8px; border-radius: 4px; margin: 4px 0; font-family: monospace; font-size: 11px;">🔧 ${part.name}</div>`;
-                                } else if (part.type === 'tool_result') {
-                                    return `<div style="background: #e0f7e6; padding: 8px; border-radius: 4px; margin: 4px 0; font-family: monospace; font-size: 11px; max-height: 100px; overflow: auto;">📋 ${part.content}</div>`;
-                                }
-                                return '';
-                            }).join('');
-                        }
-                        
-                        return `
-                            <div class="message ${isUser ? 'msg-user' : 'msg-ai'}">
-                                ${content}
-                                <div class="msg-time">${role === 'user' ? '你' : 'AI'} · ${time}</div>
-                            </div>
-                        `;
-                    }).join('');
-                    
-                    messagesEl.scrollTop = messagesEl.scrollHeight;
-                } else {
-                    messagesEl.innerHTML = '<div class="empty-state">该会话暂无消息</div>';
-                }
-            } catch (e) {
-                console.error('加载消息失败:', e);
-                document.getElementById('messages').innerHTML = '<div class="empty-state">加载消息失败</div>';
-            }
-        }
-
-        async function createNewSession() {
-            try {
-                const resp = await fetch('/api/new_session', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    currentSessionId = data.session_id;
-                    document.getElementById('sessionIdDisplay').textContent = data.session_id.substring(0, 12);
-                    document.getElementById('messages').innerHTML = '<div class="empty-state">新会话已创建，请输入内容</div>';
-                    await loadSessions();
-                } else {
-                    alert('创建失败: ' + data.error);
-                }
-            } catch (e) {
-                alert('创建失败: ' + e.message);
-            }
-        }
-
-        async function deleteSession(sessionId) {
-            if (!confirm('确定要删除这个会话吗？')) return;
-            
-            try {
-                const resp = await fetch(`/api/session/${sessionId}`, {
-                    method: 'DELETE'
-                });
-                const data = await resp.json();
-                if (data.success) {
-                    if (currentSessionId === sessionId) {
-                        currentSessionId = null;
-                        document.getElementById('sessionIdDisplay').textContent = '未选择';
-                        document.getElementById('messages').innerHTML = '<div class="empty-state">选择一个会话或创建新会话开始对话</div>';
-                    }
-                    await loadSessions();
-                } else {
-                    alert('删除失败: ' + data.error);
-                }
-            } catch (e) {
-                alert('删除失败: ' + e.message);
-            }
-        }
-
-        function changeProject() {
-            const select = document.getElementById('projectSelect');
-            currentProject = select.value;
         }
 
         function handleKeyPress(event) {
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
+            if (event.key === 'Enter') {
                 submitMessage();
             }
         }
 
         async function submitMessage() {
             const input = document.getElementById('userInput');
-            const btn = document.getElementById('sendBtn');
-            const stopBtn = document.getElementById('stopBtn');
+            const btn = document.getElementById('submitBtn');
+            const resultBox = document.getElementById('resultBox');
+            const stepsDiv = document.getElementById('processSteps');
 
             const message = input.value.trim();
             if (!message) return;
-            if (!currentSessionId) {
-                alert('请先创建或选择一个会话');
-                return;
-            }
 
-            input.value = '';
-            isProcessing = true;
+            // UI 状态：加载中
             btn.disabled = true;
-            btn.style.display = 'none';
-            stopBtn.style.display = 'inline-block';
+            btn.textContent = '处理中...';
+            resultBox.innerHTML = '<span class="loading">正在处理，请稍候...</span>';
+            stepsDiv.classList.add('show');
 
-            const messagesEl = document.getElementById('messages');
-            messagesEl.innerHTML += `
-                <div class="message msg-user">
-                    ${message}
-                    <div class="msg-time">你 · 发送中...</div>
-                </div>
-            `;
-            messagesEl.innerHTML += `
-                <div class="message msg-ai">
-                    <div style="color: var(--text-secondary);">正在处理...</div>
-                </div>
-            `;
-            messagesEl.scrollTop = messagesEl.scrollHeight;
+            document.getElementById('step1').textContent = message;
+            document.getElementById('step2').textContent = '正在梳理...';
+            document.getElementById('step3').textContent = '等待 Agent B 响应...';
 
             try {
-                abortController = new AbortController();
                 const resp = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        message,
-                        directory: currentProject,
-                        session_id: currentSessionId,
-                        new_session: false
-                    })
+                    body: JSON.stringify({ message })
                 });
 
                 const data = await resp.json();
 
                 if (data.success) {
-                    messagesEl.innerHTML = `
-                        <div class="message msg-user">
-                            ${message}
-                            <div class="msg-time">你 · ${data.timestamp}</div>
-                        </div>
-                        <div class="message msg-ai">
-                            ${data.result.replace(/\n/g, '<br>')}
-                            <div class="msg-time">AI · ${data.duration}</div>
-                        </div>
-                    `;
-                    messagesEl.scrollTop = messagesEl.scrollHeight;
-                    await loadSessions();
+                    document.getElementById('step2').textContent = data.refined_input;
+                    document.getElementById('step3').textContent = data.result.substring(0, 200) + (data.result.length > 200 ? '...' : '');
+                    
+                    resultBox.innerHTML = `<span class="success">✓ 完成 (${data.duration})</span><br><br>${data.result.replace(/\n/g, '<br>')}`;
+                    
+                    document.getElementById('lastTime').textContent = data.timestamp;
                 } else {
-                    messagesEl.innerHTML += `<div style="color: var(--danger-color);">错误: ${data.error}</div>`;
+                    resultBox.innerHTML = `<span class="error">✗ 错误: ${data.error}</span>`;
                 }
 
             } catch (e) {
-                if (e.name === 'AbortError') {
-                    messagesEl.innerHTML += '<div style="color: var(--danger-color);">用户已停止请求</div>';
-                } else {
-                    messagesEl.innerHTML += `<div style="color: var(--danger-color);">网络错误: ${e.message}</div>`;
-                }
+                resultBox.innerHTML = `<span class="error">✗ 网络错误: ${e.message}</span>`;
             } finally {
-                isProcessing = false;
                 btn.disabled = false;
-                btn.style.display = 'inline-block';
-                stopBtn.style.display = 'none';
-                abortController = null;
+                btn.textContent = '发送';
             }
         }
 
-        function stopRequest() {
-            if (abortController) {
-                abortController.abort();
-            }
-        }
-
-        document.getElementById('searchInput').addEventListener('input', loadSessions);
-        
-        loadSessions();
+        // 页面加载时检查状态
+        checkHealth();
+        setInterval(checkHealth, 30000);
     </script>
 </body>
 </html>
