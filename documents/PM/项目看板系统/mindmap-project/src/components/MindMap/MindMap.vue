@@ -18,8 +18,8 @@
 import { ref, onMounted, watch } from 'vue'
 import { useMindMapStore } from '../../stores/mindmap'
 import jsMind from 'jsmind'
-import jsMindDraggable from 'jsmind/es6/jsmind.draggable-node.js'
 import 'jsmind/style/jsmind.css'
+import jsMindDraggable from 'jsmind/draggable-node'
 import ContextMenu from './ContextMenu.vue'
 
 const emit = defineEmits(['node-click'])
@@ -31,11 +31,11 @@ const menuX = ref(0)
 const menuY = ref(0)
 const selectedNode = ref(null)
 
-console.log('[MindMap] jsMindDraggable 插件:', jsMindDraggable)
+console.log('[MindMap] jsMind loaded:', !!jsMind)
+console.log('[MindMap] Drag loaded:', !!jsMindDraggable)
 
 function loadMindMap() {
   console.log('[MindMap] 初始化脑图...')
-  console.log('[MindMap] 拖拽插件:', jsMindDraggable)
   
   const options = {
     container: 'jsmind-container',
@@ -43,6 +43,7 @@ function loadMindMap() {
     editable: true,
     mode: 'full',
     support_html: true,
+    enable_edit: true,
     view: {
       hspace: 100,
       vspace: 30,
@@ -61,11 +62,12 @@ function loadMindMap() {
   // 启用拖拽插件
   if (jsMindDraggable) {
     console.log('[MindMap] 启用拖拽插件...')
-    const draggable = new jsMindDraggable(jm.value, {
-      handle: 'jmnode',
-      enable: true
+    new jsMindDraggable(jm.value, {
+      line_color: '#4ec9b0',
+      line_width: 3,
+      line_color_invalid: '#f48771'
     })
-    console.log('[MindMap] 拖拽插件已启用', draggable)
+    console.log('[MindMap] 拖拽插件已启用')
   }
   
   render()
@@ -102,7 +104,7 @@ function render() {
 function transformToJsMind(node) {
   const result = {
     id: node.id,
-    text: node.title,
+    topic: node.title,
     expanded: true
   }
   
