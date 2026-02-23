@@ -12,13 +12,19 @@ class OpenCodeClient:
         self.timeout = timeout
         self.session_id: Optional[str] = None
 
-    def create_session(self, title: Optional[str] = None) -> Dict[str, Any]:
-        """创建新 session"""
+    def create_session(self, title: Optional[str] = None, project_path: Optional[str] = None) -> Dict[str, Any]:
+        """创建新 session
+        
+        Args:
+            title: session 标题
+            project_path: 项目路径，用于关联 session 到特定目录
+        """
         url = f"{self.base_url}/session"
         payload = {}
         if title:
             payload["title"] = title
-
+        if project_path:
+            payload["project_path"] = project_path
         resp = requests.post(url, json=payload, timeout=self.timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -66,20 +72,21 @@ class OpenCodeClient:
         resp.raise_for_status()
         return resp.json()
 
-    def call(self, message: str, title: Optional[str] = None, new_session: bool = True) -> Dict[str, Any]:
+    def call(self, message: str, title: Optional[str] = None, new_session: bool = True, project_path: Optional[str] = None) -> Dict[str, Any]:
         """便捷方法：发送消息
-        new_session: 是否创建新 session，为 False 时使用已有 session
+        Args:
+            message: 消息内容
+            title: session 标题
+            new_session: 是否创建新 session，为 False 时使用已有 session
+            project_path: 项目路径，用于关联 session 到特定目录
         """
         if new_session or not self.session_id:
-            session_info = self.create_session(title=title)
+            session_info = self.create_session(title=title, project_path=project_path)
         else:
             session_info = {"id": self.session_id}
-        
         sid = session_info["id"]
-
         result = self.send_message(message, session_id=sid)
         messages = self.get_messages(session_id=sid)
-
         return {
             "session_id": sid,
             "session_info": session_info,

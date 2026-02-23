@@ -37,6 +37,7 @@ def chat():
     directory = data.get("directory", "/root/ai-factory")
     session_id = data.get("session_id")
     new_session = data.get("new_session", True)
+    agent = data.get("agent", "")
 
     if not user_message:
         return jsonify({
@@ -45,12 +46,12 @@ def chat():
         })
 
     try:
-        agent = get_agent_a()
+        agent_a = get_agent_a()
         
         if session_id and not new_session:
-            agent.opencode_client.use_session(session_id)
+            agent_a.opencode_client.use_session(session_id)
         
-        result = agent.execute(user_message, directory=directory, new_session=new_session)
+        result = agent_a.execute(user_message, directory=directory, agent=agent, new_session=new_session)
 
         return jsonify({
             "success": True,
@@ -137,8 +138,13 @@ def get_session():
 def new_session():
     """创建新 session"""
     try:
+        data = request.get_json() or {}
+        directory = data.get("directory", "/root/ai-factory")
         agent = get_agent_a()
-        agent.opencode_client.create_session(title="New Multi-Agent Session")
+        agent.opencode_client.create_session(
+            title="New Multi-Agent Session",
+            project_path=directory
+        )
         session_id = agent.get_current_session_id()
         return jsonify({
             "success": True,
@@ -153,10 +159,15 @@ def new_session():
 
 @app.route("/api/sessions", methods=["GET"])
 def list_sessions():
-    """获取 session 列表"""
+    """获取 session 列表，支持按目录过滤"""
     try:
+        directory = request.args.get("directory", None)
         agent = get_agent_a()
-        sessions = agent.opencode_client.list_sessions(limit=50)
+        sessions = agent.opencode_client.list_sessions(limit=200)  # 增加 limit 以覆盖更多 sessions
+        # 如果指定了目录，按 directory 过滤
+        if directory and sessions:
+            sessions = [s for s in sessions if s.get("directory") == directory]
+        
         return jsonify({
             "success": True,
             "sessions": sessions

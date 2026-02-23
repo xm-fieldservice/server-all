@@ -289,6 +289,13 @@
                                 <option value="/root/ai-factory">AI Factory</option>
                             </select>
                         </div>
+                        <div class="project-selector">
+                            <span>模式:</span>
+                            <select id="modeSelect">
+                                <option value="">常规模式</option>
+                                <option value="ultrawork ">Sisyphus</option>
+                            </select>
+                        </div>
                         <div>
                             <button class="btn-stop" id="stopBtn" onclick="stopRequest()">停止</button>
                             <button class="btn-send" id="sendBtn" onclick="submitMessage()">发送</button>
@@ -307,11 +314,10 @@
 
         async function loadSessions() {
             try {
-                const resp = await fetch('/api/sessions');
+                const resp = await fetch(`/api/sessions?directory=${encodeURIComponent(currentProject)}`);
                 const data = await resp.json();
                 const listEl = document.getElementById('sessionList');
                 const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-                
                 if (data.success && data.sessions && data.sessions.length > 0) {
                     let filtered = data.sessions;
                     if (searchTerm) {
@@ -319,12 +325,10 @@
                             (s.title || '').toLowerCase().includes(searchTerm)
                         );
                     }
-                    
                     if (filtered.length === 0) {
                         listEl.innerHTML = '<div style="padding: 20px; text-align: center; color: var(--text-secondary);">无匹配会话</div>';
                         return;
                     }
-                    
                     listEl.innerHTML = filtered.map(session => `
                         <div class="session-item ${session.id === currentSessionId ? 'active' : ''}" 
                              onclick="selectSession('${session.id}')">
@@ -412,7 +416,10 @@
             try {
                 const resp = await fetch('/api/new_session', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        directory: currentProject
+                    })
                 });
                 const data = await resp.json();
                 if (data.success) {
@@ -454,6 +461,11 @@
         function changeProject() {
             const select = document.getElementById('projectSelect');
             currentProject = select.value;
+            // 切换目录时清空当前 session 并重新加载列表
+            currentSessionId = null;
+            document.getElementById('sessionIdDisplay').textContent = '未选择';
+            document.getElementById('messages').innerHTML = '<div class="empty-state">选择一个会话或创建新会话开始对话</div>';
+            loadSessions();
         }
 
         function handleKeyPress(event) {
@@ -467,13 +479,17 @@
             const input = document.getElementById('userInput');
             const btn = document.getElementById('sendBtn');
             const stopBtn = document.getElementById('stopBtn');
+            const modeSelect = document.getElementById('modeSelect');
 
-            const message = input.value.trim();
+            let message = input.value.trim();
             if (!message) return;
             if (!currentSessionId) {
                 alert('请先创建或选择一个会话');
                 return;
             }
+
+            const modePrefix = modeSelect.value;
+            message = modePrefix + message;
 
             input.value = '';
             isProcessing = true;
@@ -497,6 +513,7 @@
 
             try {
                 abortController = new AbortController();
+                const modeSelect = document.getElementById('modeSelect');
                 const resp = await fetch('/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -504,7 +521,8 @@
                         message,
                         directory: currentProject,
                         session_id: currentSessionId,
-                        new_session: false
+                        new_session: false,
+                        agent: modeSelect ? modeSelect.value.replace('@', '').trim() : ''
                     })
                 });
 
